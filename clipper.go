@@ -110,52 +110,86 @@ const (
 
 type Point struct{ X, Y int }
 type FloatPoint struct{ X, Y float64 }
-type rect struct{ left, top, right, bottom float64 }
+type rect struct{ left, top, right, bottom int }
 
 type localMinima struct {
-	y, leftBound, rightBound, nextLm float64
+	Y                     int
+	leftBound, rightBound *edge
+	nextLm                *localMinima
+}
+
+func newLocalMinima(y int, leftBound, rightBound *edge) *localMinima {
+	out := new(localMinima)
+	out.Y = y
+	out.leftBound, out.rightBound = leftBound, rightBound
+	return out
 }
 
 type scanbeam struct {
-	y      float64
+	Y      int
 	nextSb *scanbeam
 }
 
-func (sb *scanbeam) String() string {
+func (self *scanbeam) String() string {
 	s := "nil"
 	if self.nextSb != nil {
 		s = "<obj>"
 	}
-	return fmt.Sprintf("(y:%d, nextSb:%s)", sb.y, s)
+	return fmt.Sprintf("(y:%d, nextSb:%s)", self.Y, s)
 }
 
 type intersectNode struct {
-	e1, e2, pt float64
-	nextIn     *intersectNode
+	e1, e2 *edge
+	pt     *Point
+	nextIn *intersectNode
 }
 
 type outPt struct {
-	idx, pt        int
+	idx            int
+	pt             *Point
 	prevOp, nextOp *outPt
+}
+
+func newOutPt(idx int, pt *Point) *outPt {
+	out := new(outPt)
+	out.idx = idx
+	out.pt = pt
+	return out
 }
 
 type outRec struct {
 	idx       int
-	bottomPt  *Point
+	bottomPt  *outPt
 	isHole    bool
-	FirstLeft int
-	pts       int
-	PolyNode  int
+	FirstLeft *outRec
+	pts       *outPt
+	polyNode  *PolyNode
+}
+
+func newOutRec(idx int) *outRec {
+	out := new(outRec)
+	out.idx = idx
+	return out
 }
 
 type joinRec struct {
-	pt1a, pt1b, poly1Idx, pt2a, pt2b, poly2Idx int
+	pt1a, pt1b *Point
+	poly1Idx   int
+	pt2a, pt2b *Point
+	poly2Idx   int
 }
 
 type horzJoin struct {
-	edge           int
+	edge           *edge
 	savedIdx       int
 	prevHj, nextHj *horzJoin
+}
+
+func newHorzJoin(e *edge, idx int) *horzJoin {
+	hj := new(horzJoin)
+	hj.edge = e
+	hj.savedIdx = idx
+	return hj
 }
 
 //===============================================================================
@@ -165,7 +199,7 @@ type horzJoin struct {
 func IntsToPoints(ints []int) []*Point {
 	result := make([]*Point, len(ints)/2)
 	for i := 0; i < len(ints); i += 2 {
-		result[i] = Point{ints[i], ints[i+1]}
+		result[i] = &Point{ints[i], ints[i+1]}
 	}
 	return result
 }
@@ -173,14 +207,14 @@ func IntsToPoints(ints []int) []*Point {
 // see http://www.mathopenref.com/coordpolygonarea2.html
 func Area(polygon []*Point) int {
 	highI := len(polygon) - 1
-	A = (polygon[highI].x + polygon[0].x) * (polygon[0].y - polygon[highI].y)
+	A := (polygon[highI].X + polygon[0].X) * (polygon[0].Y - polygon[highI].Y)
 	for i := 0; i < highI; i++ {
-		A += (polygon[i].x + polygon[i+1].x) * (polygon[i+1].y - polygon[i].y)
+		A += (polygon[i].X + polygon[i+1].X) * (polygon[i+1].Y - polygon[i].Y)
 	}
 	return A / 2
 }
 
-func orientation(polygon []*FloatPoint) bool {
+func orientation(polygon []*Point) bool {
 	return Area(polygon) > 0.0
 }
 
@@ -190,7 +224,7 @@ func orientation(polygon []*FloatPoint) bool {
 
 // Node of PolyTree
 type PolyNode struct {
-	Contour           []*FloatPoint
+	Contour           []*Point
 	Childs            []*PolyNode
 	Parent            *PolyNode
 	Index, ChildCount int
@@ -224,7 +258,7 @@ func (self *PolyNode) addChild(node *PolyNode) {
 	self.ChildCount += 1
 }
 
-func (self *PolyNode) getNextSiblingUp() {
+func (self *PolyNode) getNextSiblingUp() *PolyNode {
 	if self.Parent == nil {
 		return nil
 	} else if self.Index == self.Parent.ChildCount-1 {
@@ -240,13 +274,22 @@ type PolyTree struct {
 	allNodes []*PolyNode
 }
 
+func (self *PolyTree) toPolyNode() *PolyNode {
+	node := new(PolyNode)
+	node.Contour = self.Contour
+	node.Childs = self.Childs
+	node.Parent = self.Parent
+	node.Index, node.ChildCount = self.Index, self.ChildCount
+	return node
+}
+
 func (self *PolyTree) Clear() {
 	self.allNodes = nil
 	self.Childs = nil
 	self.ChildCount = 0
 }
 
-func (self *PolyTree) GetFirst() {
+func (self *PolyTree) GetFirst() *PolyNode {
 	if self.ChildCount > 0 {
 		return self.Childs[0]
 	} else {
@@ -254,7 +297,7 @@ func (self *PolyTree) GetFirst() {
 	}
 }
 
-func (self *PolyTree) Total() {
+func (self *PolyTree) Total() int {
 	return len(self.allNodes)
 }
 
@@ -268,9 +311,9 @@ func addPolyNodeToPolygons(polynode *PolyNode, polygons [][]*Point) {
 	}
 }
 
-func PolyTreeToPolygons(polyTree *PolyTree) {
-	result = make([][]*Point, 0)
-	addPolyNodeToPolygons(polyTree, result)
+func PolyTreeToPolygons(polyTree *PolyTree) [][]*Point {
+	result := make([][]*Point, 0)
+	addPolyNodeToPolygons(polyTree.toPolyNode(), result)
 	return result
 }
 
@@ -289,20 +332,20 @@ type edge struct {
 }
 
 func NewEdge() *edge {
-	self := new(Edge)
-	self.Bot = Point(0, 0)
-	self.Curr = Point(0, 0)
-	self.Top = Point(0, 0)
-	self.Delta = Point(0, 0)
+	self := new(edge)
+	self.Bot = new(Point)
+	self.Curr = new(Point)
+	self.Top = new(Point)
+	self.Delta = new(Point)
 	self.outIdx = -1
 	self.polyType = Subject
-	self.side = leftSide
+	self.side = leftEdge
 	return self
 }
 
 func (self *edge) String() string {
 	return fmt.Sprintf("(%d,%d . %d,%d {dx:%0.2f} %i)",
-		self.Bot.x, self.Bot.y, self.Top.x, self.Top.y, self.dx, self.outIdx)
+		self.Bot.X, self.Bot.Y, self.Top.X, self.Top.Y, self.dx, self.outIdx)
 }
 
 //===============================================================================
@@ -310,27 +353,27 @@ func (self *edge) String() string {
 //===============================================================================
 
 func pointsEqual(pt1, pt2 *Point) bool {
-	return (pt1.x == pt2.x) && (pt1.y == pt2.y)
+	return (pt1.X == pt2.X) && (pt1.Y == pt2.Y)
 }
 
 func slopesEqual(pt1, pt2, pt3, pt4 *Point) bool {
 	if pt4 == nil {
-		return (pt1.y-pt2.y)*(pt2.x-pt3.x) == (pt1.x-pt2.x)*(pt2.y-pt3.y)
+		return (pt1.Y-pt2.Y)*(pt2.X-pt3.X) == (pt1.X-pt2.X)*(pt2.Y-pt3.Y)
 	} else {
-		return (pt1.y-pt2.y)*(pt3.x-pt4.x) == (pt1.x-pt2.x)*(pt3.y-pt4.y)
+		return (pt1.Y-pt2.Y)*(pt3.X-pt4.X) == (pt1.X-pt2.X)*(pt3.Y-pt4.Y)
 	}
 }
 
 func slopesEqual2(e1, e2 *edge) bool {
-	return e1.Delta.y*e2.Delta.x == e1.Delta.x*e2.Delta.y
+	return e1.Delta.Y*e2.Delta.X == e1.Delta.X*e2.Delta.Y
 }
 
 func setDx(e *edge) {
-	e.Delta = Point{e.Top.x - e.Bot.x, e.Top.y - e.Bot.y}
-	if e.Delta.y == 0 {
+	e.Delta = &Point{e.Top.X - e.Bot.X, e.Top.Y - e.Bot.Y}
+	if e.Delta.Y == 0 {
 		e.dx = horizontal
 	} else {
-		e.dx = float(e.Delta.x) / float(e.Delta.y)
+		e.dx = float64(e.Delta.X) / float64(e.Delta.Y)
 	}
 }
 
@@ -346,11 +389,11 @@ func swapPolyIndexes(e1, e2 *edge) {
 	e2.outIdx = idx
 }
 
-func initEdge(e, eNext, ePrev *edge, pt *Point, polyType *PolyType) {
+func initEdge(e, eNext, ePrev *edge, pt *Point, polyType PolyType) {
 	e.nextE = eNext
 	e.prevE = ePrev
 	e.Curr = pt
-	if e.Curr.y >= e.nextE.Curr.y {
+	if e.Curr.Y >= e.nextE.Curr.Y {
 		e.Bot = e.Curr
 		e.Top = e.nextE.Curr
 		e.windDelta = 1
@@ -361,30 +404,30 @@ func initEdge(e, eNext, ePrev *edge, pt *Point, polyType *PolyType) {
 	}
 	setDx(e)
 	e.outIdx = -1
-	e.PolyType = polyType
+	e.polyType = polyType
 }
 
 func swapX(e *edge) {
-	e.Curr = Point{e.Top.x, e.Curr.y}
-	e.Top = Point{e.Bot.x, e.Top.y}
-	e.Bot = Point{e.Curr.x, e.Bot.y}
+	e.Curr = &Point{e.Top.X, e.Curr.Y}
+	e.Top = &Point{e.Bot.X, e.Top.Y}
+	e.Bot = &Point{e.Curr.X, e.Bot.Y}
 }
 
 type ClipperBase struct {
-	EdgeList      [][]*edge // 2D array
-	LocalMinList  *edge     // single-linked list of LocalMinima
-	CurrentLocMin *edge
+	edgeList      [][]*edge    // 2D array
+	localMinList  *localMinima // single-linked list of LocalMinima
+	currentLocMin *localMinima
 }
 
-func (self *ClipperBase) insertLocalMinima(lm *edge) {
-	if self._LocalMinList == nil {
-		self._LocalMinList = lm
-	} else if lm.y >= self._LocalMinList.y {
-		lm.nextLm = self._LocalMinList
-		self._LocalMinList = lm
+func (self *ClipperBase) insertLocalMinima(lm *localMinima) {
+	if self.localMinList == nil {
+		self.localMinList = lm
+	} else if lm.Y >= self.localMinList.Y {
+		lm.nextLm = self.localMinList
+		self.localMinList = lm
 	} else {
-		tmp := self._LocalMinList
-		for tmp.nextLm != nil && lm.y < tmp.nextLm.y {
+		tmp := self.localMinList
+		for tmp.nextLm != nil && lm.Y < tmp.nextLm.Y {
 			tmp = tmp.nextLm
 		}
 		lm.nextLm = tmp.nextLm
@@ -392,19 +435,19 @@ func (self *ClipperBase) insertLocalMinima(lm *edge) {
 	}
 }
 
-func (self *ClipperBase) addBoundsToLML(e *edge) {
+func (self *ClipperBase) addBoundsToLML(e *edge) *edge {
 	e.nextInLML = nil
 	e = e.nextE
 	for {
 		if e.dx == horizontal {
-			if (e.nextE.Top.y < e.Top.y) && (e.nextE.Bot.x > e.prevE.Bot.x) {
+			if (e.nextE.Top.Y < e.Top.Y) && (e.nextE.Bot.X > e.prevE.Bot.X) {
 				break
 			}
-			if e.Top.x != e.prevE.Bot.x {
+			if e.Top.X != e.prevE.Bot.X {
 				swapX(e)
 			}
 			e.nextInLML = e.prevE
-		} else if e.Bot.y == e.prevE.Bot.y {
+		} else if e.Bot.Y == e.prevE.Bot.Y {
 			break
 		} else {
 			e.nextInLML = e.prevE
@@ -412,49 +455,50 @@ func (self *ClipperBase) addBoundsToLML(e *edge) {
 		e = e.nextE
 	}
 
+	var lm *localMinima
 	if e.dx == horizontal {
-		if e.Bot.x != e.prevE.Bot.x {
+		if e.Bot.X != e.prevE.Bot.X {
 			swapX(e)
 		}
-		lm = LocalMinima(e.prevE.Bot.y, e.prevE, e)
+		lm = newLocalMinima(e.prevE.Bot.Y, e.prevE, e)
 	} else if e.dx < e.prevE.dx {
-		lm = LocalMinima(e.prevE.Bot.y, e.prevE, e)
+		lm = newLocalMinima(e.prevE.Bot.Y, e.prevE, e)
 	} else {
-		lm = LocalMinima(e.prevE.Bot.y, e, e.prevE)
+		lm = newLocalMinima(e.prevE.Bot.Y, e, e.prevE)
 	}
-	lm.leftBound.side = EdgeSide.Left
-	lm.rightBound.side = EdgeSide.Right
+	lm.leftBound.side = leftEdge
+	lm.rightBound.side = rightEdge
 	self.insertLocalMinima(lm)
 	for {
-		if e.nextE.Top.y == e.Top.y && e.nextE.dx != horizontal {
+		if e.nextE.Top.Y == e.Top.Y && e.nextE.dx != horizontal {
 			break
 		}
 		e.nextInLML = e.nextE
 		e = e.nextE
-		if e.dx == horizontal && e.Bot.x != e.prevE.Top.x {
+		if e.dx == horizontal && e.Bot.X != e.prevE.Top.X {
 			swapX(e)
 		}
 	}
 	return e.nextE
 }
 
-func (self *ClipperBase) reset() {
-	lm := self._LocalMinList
+func (self *ClipperBase) resetBase() {
+	lm := self.localMinList
 	if lm != nil {
-		self._CurrentLocMin = lm
+		self.currentLocMin = lm
 	}
 	for lm != nil {
 		e := lm.leftBound
 		for e != nil {
 			e.Curr = e.Bot
-			e.side = EdgeSide.Left
+			e.side = leftEdge
 			e.outIdx = -1
 			e = e.nextInLML
 		}
 		e = lm.rightBound
 		for e != nil {
 			e.Curr = e.Bot
-			e.side = EdgeSide.Right
+			e.side = rightEdge
 			e.outIdx = -1
 			e = e.nextInLML
 		}
@@ -462,7 +506,7 @@ func (self *ClipperBase) reset() {
 	}
 }
 
-func (self *ClipperBase) AddPolygon(polygon []*Point, polyType *PolyType) bool {
+func (self *ClipperBase) AddPolygon(polygon []*Point, polyType PolyType) bool {
 	ln := len(polygon)
 	if ln < 3 {
 		return false
@@ -473,7 +517,7 @@ func (self *ClipperBase) AddPolygon(polygon []*Point, polyType *PolyType) bool {
 	for i := 1; i < len(polygon); i++ {
 		if pointsEqual(pg[j], polygon[i]) {
 			continue
-		} else if (j > 0) && slopesEqual(pg[j-1], pg[j], polygon[i]) {
+		} else if (j > 0) && slopesEqual(pg[j-1], pg[j], polygon[i], nil) {
 			if pointsEqual(pg[j-1], polygon[i]) {
 				j -= 1
 			}
@@ -491,12 +535,13 @@ func (self *ClipperBase) AddPolygon(polygon []*Point, polyType *PolyType) bool {
 	for ln > 2 {
 		if pointsEqual(pg[j], pg[0]) {
 			j -= 1
-		} else if pointsEqual(pg[0], pg[1]) || slopesEqual(pg[j], pg[0], pg[1]) {
+		} else if pointsEqual(pg[0], pg[1]) ||
+			slopesEqual(pg[j], pg[0], pg[1], nil) {
 			pg[0] = pg[j]
 			j -= 1
-		} else if slopesEqual(pg[j-1], pg[j], pg[0]) {
+		} else if slopesEqual(pg[j-1], pg[j], pg[0], nil) {
 			j -= 1
-		} else if slopesEqual(pg[0], pg[1], pg[2]) {
+		} else if slopesEqual(pg[0], pg[1], pg[2], nil) {
 			for i := 2; i < j+1; i++ {
 				pg[i-1] = pg[i]
 			}
@@ -523,7 +568,7 @@ func (self *ClipperBase) AddPolygon(polygon []*Point, polyType *PolyType) bool {
 	eHighest := e
 	for {
 		e.Curr = e.Bot
-		if e.Top.y < eHighest.Top.y {
+		if e.Top.Y < eHighest.Top.Y {
 			eHighest = e
 		}
 		e = e.nextE
@@ -562,8 +607,8 @@ func (self *ClipperBase) AddPolygons(polygons [][]*Point, polyType PolyType) boo
 	return result
 }
 
-func (self *ClipperBase) Clear() {
-	self.edgeList = make([]*edge, 0)
+func (self *ClipperBase) clearBase() {
+	self.edgeList = make([][]*edge, 0)
 	self.localMinList = nil
 	self.currentLocMin = nil
 }
@@ -578,34 +623,34 @@ func (self *ClipperBase) popLocalMinima() {
 // Clipper class (+ data structs & ancilliary functions)
 //===============================================================================
 func intersectPoint(edge1, edge2 *edge) (*Point, bool) {
-	var x, y float64
+	var x, y int
 	if slopesEqual2(edge1, edge2) {
-		if edge2.Bot.y > edge1.Bot.y {
-			y = edge2.Bot.y
+		if edge2.Bot.Y > edge1.Bot.Y {
+			y = edge2.Bot.Y
 		} else {
-			y = edge1.Bot.y
+			y = edge1.Bot.Y
 		}
-		return Point(0, y), false
+		return &Point{0, y}, false
 	}
 	if edge1.dx == 0 {
-		x = edge1.Bot.x
+		x = edge1.Bot.X
 		if edge2.dx == horizontal {
-			y = edge2.Bot.y
+			y = edge2.Bot.Y
 		} else {
-			b2 := edge2.Bot.y - float(edge2.Bot.x)/edge2.dx
-			y = round(float(x)/edge2.dx + b2)
+			b2 := float64(edge2.Bot.Y) - float64(edge2.Bot.X)/edge2.dx
+			y = round(float64(x)/edge2.dx + b2)
 		}
 	} else if edge2.dx == 0 {
-		x = edge2.Bot.x
+		x = edge2.Bot.X
 		if edge1.dx == horizontal {
-			y = edge1.Bot.y
+			y = edge1.Bot.Y
 		} else {
-			b1 := edge1.Bot.y - float(edge1.Bot.x)/edge1.dx
-			y = round(float(x)/edge1.dx + b1)
+			b1 := float64(edge1.Bot.Y) - float64(edge1.Bot.X)/edge1.dx
+			y = round(float64(x)/edge1.dx + b1)
 		}
 	} else {
-		b1 := float(edge1.Bot.x) - float(edge1.Bot.y)*edge1.dx
-		b2 := float(edge2.Bot.x) - float(edge2.Bot.y)*edge2.dx
+		b1 := float64(edge1.Bot.X) - float64(edge1.Bot.Y)*edge1.dx
+		b2 := float64(edge2.Bot.X) - float64(edge2.Bot.Y)*edge2.dx
 		m := (b2 - b1) / (edge1.dx - edge2.dx)
 		y = round(m)
 		if math.Abs(edge1.dx) < math.Abs(edge2.dx) {
@@ -614,35 +659,35 @@ func intersectPoint(edge1, edge2 *edge) (*Point, bool) {
 			x = round(edge2.dx*m + b2)
 		}
 	}
-	if (y < edge1.Top.y) || (y < edge2.Top.y) {
-		if edge1.Top.y > edge2.Top.y {
-			return edge1.Top, topX(edge2, edge1.Top.y) < edge1.Top.x
+	if (y < edge1.Top.Y) || (y < edge2.Top.Y) {
+		if edge1.Top.Y > edge2.Top.Y {
+			return edge1.Top, topX(edge2, edge1.Top.Y) < edge1.Top.X
 		} else {
-			return edge2.Top, topX(edge1, edge2.Top.y) > edge2.Top.x
+			return edge2.Top, topX(edge1, edge2.Top.Y) > edge2.Top.X
 		}
 	} else {
-		return Point(x, y), true
+		return &Point{x, y}, true
 	}
 }
 
-func topX(e *edge, currentY float64) float64 {
-	if currentY == e.Top.y {
-		return e.Top.x
-	} else if e.Top.x == e.Bot.x {
-		return e.Bot.x
+func topX(e *edge, currentY int) int {
+	if currentY == e.Top.Y {
+		return e.Top.X
+	} else if e.Top.X == e.Bot.X {
+		return e.Bot.X
 	} else {
-		return e.Bot.x + round(e.dx*float(currentY-e.Bot.y))
+		return e.Bot.X + round(e.dx*float64(currentY-e.Bot.Y))
 	}
 }
 
 func e2InsertsBeforeE1(e1, e2 *edge) bool {
-	if e2.Curr.x == e1.Curr.x {
-		if e2.Top.y > e1.Top.y {
-			return e2.Top.x < _TopX(e1, e2.Top.y)
+	if e2.Curr.X == e1.Curr.X {
+		if e2.Top.Y > e1.Top.Y {
+			return e2.Top.X < topX(e1, e2.Top.Y)
 		}
-		return e1.Top.x > _TopX(e2, e1.Top.y)
+		return e1.Top.X > topX(e2, e1.Top.Y)
 	} else {
-		return e2.Curr.x < e1.Curr.x
+		return e2.Curr.X < e1.Curr.X
 	}
 }
 
@@ -650,23 +695,23 @@ func isMinima(e *edge) bool {
 	return (e != nil) && (e.prevE.nextInLML != e) && (e.nextE.nextInLML != e)
 }
 
-func isMaxima(e *edge, y float64) bool {
-	return (e != nil) && (e.Top.y == y) && (e.nextInLML == nil)
+func isMaxima(e *edge, y int) bool {
+	return (e != nil) && (e.Top.Y == y) && (e.nextInLML == nil)
 }
 
-func isIntermediate(e *edge, y float64) bool {
-	return e.Top.y == y && e.nextInLML != nil
+func isIntermediate(e *edge, y int) bool {
+	return e.Top.Y == y && e.nextInLML != nil
 }
 
-func getMaximaPair(e *edge) {
-	if !isMaxima(e.nextE, e.Top.y) || e.nextE.Top.x != e.Top.x {
+func getMaximaPair(e *edge) *edge {
+	if !isMaxima(e.nextE, e.Top.Y) || e.nextE.Top.X != e.Top.X {
 		return e.prevE
 	} else {
 		return e.nextE
 	}
 }
 
-func getnextInAEL(e *edge, dir *direction) {
+func getnextInAEL(e *edge, dir direction) *edge {
 	if dir == leftToRight {
 		return e.nextInAEL
 	} else {
@@ -690,15 +735,15 @@ func protectRight(val bool) protects {
 	}
 }
 
-func getDx(pt1, pt2 *Point) {
-	if pt1.y == pt2.y {
+func getDx(pt1, pt2 *Point) float64 {
+	if pt1.Y == pt2.Y {
 		return horizontal
 	} else {
-		return float(pt2.x-pt1.x) / float(pt2.y-pt1.y)
+		return float64(pt2.X-pt1.X) / float64(pt2.Y-pt1.Y)
 	}
 }
 
-func param1RightOfParam2(outRec1, outRec2 *edge) bool {
+func param1RightOfParam2(outRec1, outRec2 *outRec) bool {
 	for outRec1 != nil {
 		outRec1 = outRec1.FirstLeft
 		if outRec1 == outRec2 {
@@ -713,35 +758,35 @@ func firstParamIsbottomPt(btmPt1, btmPt2 *outPt) bool {
 	for pointsEqual(p.pt, btmPt1.pt) && (p != btmPt1) {
 		p = p.prevOp
 	}
-	dx1p := abs(getDx(btmPt1.pt, p.pt))
+	dx1p := math.Abs(getDx(btmPt1.pt, p.pt))
 	p = btmPt1.nextOp
 	for pointsEqual(p.pt, btmPt1.pt) && (p != btmPt1) {
 		p = p.nextOp
 	}
-	dx1n := abs(getDx(btmPt1.pt, p.pt))
+	dx1n := math.Abs(getDx(btmPt1.pt, p.pt))
 
 	p = btmPt2.prevOp
 	for pointsEqual(p.pt, btmPt2.pt) && (p != btmPt2) {
 		p = p.prevOp
 	}
-	dx2p := abs(getDx(btmPt2.pt, p.pt))
+	dx2p := math.Abs(getDx(btmPt2.pt, p.pt))
 	p = btmPt2.nextOp
 	for pointsEqual(p.pt, btmPt2.pt) && (p != btmPt2) {
 		p = p.nextOp
 	}
-	dx2n = abs(getDx(btmPt2.pt, p.pt))
+	dx2n := math.Abs(getDx(btmPt2.pt, p.pt))
 	return (dx1p >= dx2p && dx1p >= dx2n) || (dx1n >= dx2p && dx1n >= dx2n)
 }
 
-func getBottomPt(pp *outPt) *Point {
+func getBottomPt(pp *outPt) *outPt {
 	var dups *outPt
-	p = pp.nextOp
+	p := pp.nextOp
 	for p != pp {
-		if p.pt.y > pp.pt.y {
+		if p.pt.Y > pp.pt.Y {
 			pp = p
 			dups = nil
-		} else if p.pt.y == pp.pt.y && p.pt.x <= pp.pt.x {
-			if p.pt.x < pp.pt.x {
+		} else if p.pt.Y == pp.pt.Y && p.pt.X <= pp.pt.X {
+			if p.pt.X < pp.pt.X {
 				dups = nil
 				pp = p
 			} else {
@@ -766,7 +811,7 @@ func getBottomPt(pp *outPt) *Point {
 	return pp
 }
 
-func getLowermostRec(outRec1, outRec2 *outPt) {
+func getLowermostRec(outRec1, outRec2 *outRec) *outRec {
 	var outPt1, outPt2 *outPt
 	if outRec1.bottomPt == nil {
 		outPt1 = getBottomPt(outRec1.pts)
@@ -778,13 +823,13 @@ func getLowermostRec(outRec1, outRec2 *outPt) {
 	} else {
 		outPt2 = outRec2.bottomPt
 	}
-	if outPt1.pt.y > outPt2.pt.y {
+	if outPt1.pt.Y > outPt2.pt.Y {
 		return outRec1
-	} else if outPt1.pt.y < outPt2.pt.y {
+	} else if outPt1.pt.Y < outPt2.pt.Y {
 		return outRec2
-	} else if outPt1.pt.x < outPt2.pt.x {
+	} else if outPt1.pt.X < outPt2.pt.X {
 		return outRec1
-	} else if outPt1.pt.x > outPt2.pt.x {
+	} else if outPt1.pt.X > outPt2.pt.X {
 		return outRec2
 	} else if outPt1.nextOp == outPt1 {
 		return outRec2
@@ -797,7 +842,7 @@ func getLowermostRec(outRec1, outRec2 *outPt) {
 	}
 }
 
-func setHoleState(e *edge, outRec *outPt, polyOutList [][]*Point) {
+func setHoleState(e *edge, outRec *outRec, polyOutList []*outRec) {
 	isHole := false
 	e2 := e.prevInAEL
 	for e2 != nil {
@@ -812,12 +857,12 @@ func setHoleState(e *edge, outRec *outPt, polyOutList [][]*Point) {
 	outRec.isHole = isHole
 }
 
-func pointCount(pts []*Point) int {
+func pointCount(pts *outPt) int {
 	if pts == nil {
 		return 0
 	}
 	p := pts
-	result = 0
+	result := 0
 	for {
 		result++
 		p = p.nextOp
@@ -828,7 +873,7 @@ func pointCount(pts []*Point) int {
 	return result
 }
 
-func pointIsVertex(pt *Point, outPts []*outPt) bool {
+func pointIsVertex(pt *Point, outPts *outPt) bool {
 	op := outPts
 	for {
 		if pointsEqual(op.pt, pt) {
@@ -842,7 +887,7 @@ func pointIsVertex(pt *Point, outPts []*outPt) bool {
 	return false
 }
 
-func reversePolyPtLinks(pp *Point) {
+func reversePolyPtLinks(pp *outPt) {
 	if pp == nil {
 		return
 	}
@@ -858,17 +903,17 @@ func reversePolyPtLinks(pp *Point) {
 	}
 }
 
-func fixupOutPolygon(outRec []*Point) {
-	lastOK = nil
+func fixupOutPolygon(outRec *outRec) {
+	var lastOK *outPt
 	outRec.bottomPt = nil
-	pp = outRec.pts
+	pp := outRec.pts
 	for {
 		if pp.prevOp == pp || pp.nextOp == pp.prevOp {
 			outRec.pts = nil
 			return
 		}
 		if pointsEqual(pp.pt, pp.nextOp.pt) ||
-			slopesEqual(pp.prevOp.pt, pp.pt, pp.nextOp.pt) {
+			slopesEqual(pp.prevOp.pt, pp.pt, pp.nextOp.pt, nil) {
 			lastOK = nil
 			pp.prevOp.nextOp = pp.nextOp
 			pp.nextOp.prevOp = pp.prevOp
@@ -885,67 +930,67 @@ func fixupOutPolygon(outRec []*Point) {
 	outRec.pts = pp
 }
 
-func fixHoleLinkage(outRec []*Point) {
-	if outRec.FirstLeft == nil ||
-		(outRec.isHole != outRec.FirstLeft.isHole &&
-			outRec.FirstLeft.pts != nil) {
+func fixHoleLinkage(outrec *outRec) {
+	if outrec.FirstLeft == nil ||
+		(outrec.isHole != outrec.FirstLeft.isHole &&
+			outrec.FirstLeft.pts != nil) {
 		return
 	}
-	orfl := outRec.FirstLeft
+	orfl := outrec.FirstLeft
 	for orfl != nil &&
-		(orfl.isHole == outRec.isHole || orfl.pts == nil) {
+		(orfl.isHole == outrec.isHole || orfl.pts == nil) {
 		orfl = orfl.FirstLeft
 	}
-	outRec.FirstLeft = orfl
+	outrec.FirstLeft = orfl
 }
 
 func getOverlapSegment(pt1a, pt1b, pt2a, pt2b *Point) (*Point, *Point, bool) {
 	// precondition: segments are co-linear
 	var pt1, pt2 *Point
-	if abs(pt1a.x-pt1b.x) > abs(pt1a.y-pt1b.y) {
-		if pt1a.x > pt1b.x {
+	if intAbs(pt1a.X-pt1b.X) > intAbs(pt1a.Y-pt1b.Y) {
+		if pt1a.X > pt1b.X {
 			tmp := pt1a
 			pt1a = pt1b
 			pt1b = tmp
 		}
-		if pt2a.x > pt2b.x {
+		if pt2a.X > pt2b.X {
 			tmp := pt2a
 			pt2a = pt2b
 			pt2b = tmp
 		}
-		if pt1a.x > pt2a.x {
+		if pt1a.X > pt2a.X {
 			pt1 = pt1a
 		} else {
 			pt1 = pt2a
 		}
-		if pt1b.x < pt2b.x {
+		if pt1b.X < pt2b.X {
 			pt2 = pt1b
 		} else {
 			pt2 = pt2b
 		}
-		return pt1, pt2, pt1.x < pt2.x
+		return pt1, pt2, pt1.X < pt2.X
 	} else {
-		if pt1a.y < pt1b.y {
+		if pt1a.Y < pt1b.Y {
 			tmp := pt1a
 			pt1a = pt1b
 			pt1b = tmp
 		}
-		if pt2a.y < pt2b.y {
+		if pt2a.Y < pt2b.Y {
 			tmp := pt2a
 			pt2a = pt2b
 			pt2b = tmp
 		}
-		if pt1a.y < pt2a.y {
+		if pt1a.Y < pt2a.Y {
 			pt1 = pt1a
 		} else {
 			pt1 = pt2a
 		}
-		if pt1b.y > pt2b.y {
+		if pt1b.Y > pt2b.Y {
 			pt2 = pt1b
 		} else {
 			pt2 = pt2b
 		}
-		return pt1, pt2, pt1.y > pt2.y
+		return pt1, pt2, pt1.Y > pt2.Y
 	}
 }
 
@@ -957,7 +1002,7 @@ func findSegment(outPt *outPt, pt1, pt2 *Point) (*outPt, *Point, *Point, bool) {
 	pt2a := pt2
 	outPt2 := outPt
 	for {
-		if slopesEqual(pt1a, pt2a, outPt.pt, outPt.prevOp.pt) && slopesEqual(pt1a, pt2a, outPt.pt) {
+		if slopesEqual(pt1a, pt2a, outPt.pt, outPt.prevOp.pt) && slopesEqual(pt1a, pt2a, outPt.pt, nil) {
 			pt1, pt2, overlap := getOverlapSegment(pt1a, pt2a, outPt.pt, outPt.prevOp.pt)
 			if overlap {
 				return outPt, pt1, pt2, true
@@ -973,10 +1018,10 @@ func findSegment(outPt *outPt, pt1, pt2 *Point) (*outPt, *Point, *Point, bool) {
 func pt3IsBetweenPt1AndPt2(pt1, pt2, pt3 *Point) bool {
 	if pointsEqual(pt1, pt3) || pointsEqual(pt2, pt3) {
 		return true
-	} else if pt1.x != pt2.x {
-		return (pt1.x < pt3.x) == (pt3.x < pt2.x)
+	} else if pt1.X != pt2.X {
+		return (pt1.X < pt3.X) == (pt3.X < pt2.X)
 	} else {
-		return (pt1.y < pt3.y) == (pt3.y < pt2.y)
+		return (pt1.Y < pt3.Y) == (pt3.Y < pt2.Y)
 	}
 }
 
@@ -984,7 +1029,7 @@ func insertPolyPtBetween(outPt1, outPt2 *outPt, pt *Point) *outPt {
 	if outPt1 == outPt2 {
 		panic("JoinError")
 	}
-	result := &OutPt{outPt1.idx, pt}
+	result := newOutPt(outPt1.idx, pt)
 	if outPt2 == outPt1.nextOp {
 		outPt1.nextOp = result
 		outPt2.prevOp = result
@@ -1000,15 +1045,15 @@ func insertPolyPtBetween(outPt1, outPt2 *outPt, pt *Point) *outPt {
 }
 
 func PointOnLineSegment(pt, linePt1, linePt2 *Point) bool {
-	return ((pt.x == linePt1.x) && (pt.y == linePt1.y)) ||
-		((pt.x == linePt2.x) && (pt.y == linePt2.y)) ||
-		(((pt.x > linePt1.x) == (pt.x < linePt2.x)) &&
-			((pt.y > linePt1.y) == (pt.y < linePt2.y)) &&
-			((pt.x-linePt1.x)*(linePt2.y-linePt1.y) ==
-				(linePt2.x-linePt1.x)*(pt.y-linePt1.y)))
+	return ((pt.X == linePt1.X) && (pt.Y == linePt1.Y)) ||
+		((pt.X == linePt2.X) && (pt.Y == linePt2.Y)) ||
+		(((pt.X > linePt1.X) == (pt.X < linePt2.X)) &&
+			((pt.Y > linePt1.Y) == (pt.Y < linePt2.Y)) &&
+			((pt.X-linePt1.X)*(linePt2.Y-linePt1.Y) ==
+				(linePt2.X-linePt1.X)*(pt.Y-linePt1.Y)))
 }
 
-func PointOnPolygon(pt, pp *Point) bool {
+func PointOnPolygon(pt *Point, pp *outPt) bool {
 	pp2 := pp
 	for {
 		if PointOnLineSegment(pt, pp2.pt, pp2.nextOp.pt) {
@@ -1021,14 +1066,14 @@ func PointOnPolygon(pt, pp *Point) bool {
 	}
 }
 
-func PointInPolygon(pt []*Point, outPt *outPt) bool {
+func PointInPolygon(pt *Point, outPt *outPt) bool {
 	result := false
 	outPt2 := outPt
 	for {
-		if (((outPt2.pt.y <= pt.y) && (pt.y < outPt2.prevOp.pt.y)) ||
-			((outPt2.prevOp.pt.y <= pt.y) && (pt.y < outPt2.pt.y))) &&
-			(pt.x < (outPt2.prevOp.pt.x-outPt2.pt.x)*(pt.y-outPt2.pt.y)/
-				(outPt2.prevOp.pt.y-outPt2.pt.y)+outPt2.pt.x) {
+		if (((outPt2.pt.Y <= pt.Y) && (pt.Y < outPt2.prevOp.pt.Y)) ||
+			((outPt2.prevOp.pt.Y <= pt.Y) && (pt.Y < outPt2.pt.Y))) &&
+			(pt.X < (outPt2.prevOp.pt.X-outPt2.pt.X)*(pt.Y-outPt2.pt.Y)/
+				(outPt2.prevOp.pt.Y-outPt2.pt.Y)+outPt2.pt.X) {
 			result = !result
 		}
 		outPt2 = outPt2.nextOp
@@ -1039,7 +1084,7 @@ func PointInPolygon(pt []*Point, outPt *outPt) bool {
 	return result
 }
 
-func Poly2ContainsPoly1(outPt1, outPt2 *outPt) bool {
+func poly2ContainsPoly1(outPt1, outPt2 *outPt) bool {
 	pt := outPt1
 	if PointOnPolygon(pt.pt, outPt2) {
 		pt = pt.nextOp
@@ -1053,12 +1098,12 @@ func Poly2ContainsPoly1(outPt1, outPt2 *outPt) bool {
 	return PointInPolygon(pt.pt, outPt2)
 }
 
-func EdgesAdjacent(inode *intersectNode) bool {
+func edgesAdjacent(inode *intersectNode) bool {
 	return (inode.e1.nextInSEL == inode.e2) ||
 		(inode.e1.prevInSEL == inode.e2)
 }
 
-func UpdateOutPtIdxs(outrec *outRec) {
+func updateOutPtIdxs(outrec *outRec) {
 	op := outrec.pts
 	for {
 		op.idx = outrec.idx
@@ -1074,74 +1119,74 @@ type Clipper struct {
 	ReverseSolution bool
 	ForceSimple     bool
 
-	polyOutList    [][]*Point
+	polyOutList    []*outRec
 	clipType       ClipType
-	scanbeam       *edge
-	activeEdges    []*edge
-	sortedEdges    []*edge
-	intersectNodes []*intersectNode
+	scanbeam       *scanbeam
+	activeEdges    *edge
+	sortedEdges    *edge
+	intersectNodes *intersectNode
 	clipFillType   PolyFillType
 	subjFillType   PolyFillType
 	executeLocked  bool
 	usingPolyTree  bool
-	joinList       []*edge
-	horzJoins      []*edge
+	joinList       []*joinRec
+	horzJoins      *horzJoin
 }
 
 func NewClipper() *Clipper {
 	self := new(Clipper)
 	self.ReverseSolution = false
 	self.ForceSimple = false
-	self.polyOutList = make([][]*Point, 0)
-	self.clipType = ClipType.Intersection
-	self.clipFillType = PolyFillType.EvenOdd
-	self.subjFillType = PolyFillType.EvenOdd
+	self.polyOutList = make([]*outRec, 0)
+	self.clipType = Intersection
+	self.clipFillType = EvenOdd
+	self.subjFillType = EvenOdd
 	return self
 }
 
 func (self *Clipper) reset() {
-	ClipperBase.reset(self)
+	self.resetBase()
 	self.scanbeam = nil
-	self.polyOutList = make([][]*Point, 0)
-	lm = self._LocalMinList
+	self.polyOutList = make([]*outRec, 0)
+	lm := self.localMinList
 	for lm != nil {
-		self._InsertScanbeam(lm.y)
+		self.insertScanbeam(lm.Y)
 		lm = lm.nextLm
 	}
 }
 
 func (self *Clipper) Clear() {
-	self.polyOutList = make([][]*Point, 0)
-	ClipperBase.Clear(self)
+	self.polyOutList = make([]*outRec, 0)
+	self.clearBase()
 }
 
-func (self *Clipper) insertScanbeam(y float64) {
+func (self *Clipper) insertScanbeam(y int) {
 	if self.scanbeam == nil {
-		self.scanbeam = Scanbeam(y)
-	} else if y > self.scanbeam.y {
-		self.scanbeam = Scanbeam(y, self.scanbeam)
+		self.scanbeam = &scanbeam{Y: y}
+	} else if y > self.scanbeam.Y {
+		self.scanbeam = &scanbeam{y, self.scanbeam}
 	} else {
 		sb := self.scanbeam
-		for sb.nextSb != nil && y <= sb.nextSb.y {
+		for sb.nextSb != nil && y <= sb.nextSb.Y {
 			sb = sb.nextSb
 		}
-		if y == sb.y {
+		if y == sb.Y {
 			return
 		}
-		newSb := Scanbeam(y, sb.nextSb)
+		newSb := &scanbeam{y, sb.nextSb}
 		sb.nextSb = newSb
 	}
 }
 
-func (self *Clipper) popScanbeam() *Scanbeam {
-	result := self.scanbeam.y
+func (self *Clipper) popScanbeam() int {
+	result := self.scanbeam.Y
 	self.scanbeam = self.scanbeam.nextSb
 	return result
 }
 
 func (self *Clipper) setWindingCount(edge *edge) {
 	e := edge.prevInAEL
-	for e != nil && e.PolyType != edge.PolyType {
+	for e != nil && e.polyType != edge.polyType {
 		e = e.prevInAEL
 	}
 	if e == nil {
@@ -1154,7 +1199,7 @@ func (self *Clipper) setWindingCount(edge *edge) {
 		e = e.nextInAEL
 	} else {
 		if e.windCnt*e.windDelta < 0 {
-			if abs(e.windCnt) > 1 {
+			if intAbs(e.windCnt) > 1 {
 				if e.windDelta*edge.windDelta < 0 {
 					edge.windCnt = e.windCnt
 				} else {
@@ -1163,7 +1208,7 @@ func (self *Clipper) setWindingCount(edge *edge) {
 			} else {
 				edge.windCnt = e.windCnt + e.windDelta + edge.windDelta
 			}
-		} else if (abs(e.windCnt) > 1) && (e.windDelta*edge.windDelta < 0) {
+		} else if (intAbs(e.windCnt) > 1) && (e.windDelta*edge.windDelta < 0) {
 			edge.windCnt = e.windCnt
 		} else if e.windCnt+edge.windDelta == 0 {
 			edge.windCnt = e.windCnt
@@ -1191,74 +1236,74 @@ func (self *Clipper) setWindingCount(edge *edge) {
 	}
 }
 
-func (self *Clipper) isEvenOddFillType(edge *edge) {
-	if edge.PolyType == PolyType.Subject {
-		return self._SubjFillType == PolyFillType.EvenOdd
+func (self *Clipper) isEvenOddFillType(edge *edge) bool {
+	if edge.polyType == Subject {
+		return self.subjFillType == EvenOdd
 	} else {
-		return self._ClipFillType == PolyFillType.EvenOdd
+		return self.clipFillType == EvenOdd
 	}
 }
 
-func (self *Clipper) isEvenOddAltFillType(edge *edge) {
-	if edge.PolyType == PolyType.Subject {
-		return self._ClipFillType == PolyFillType.EvenOdd
+func (self *Clipper) isEvenOddAltFillType(edge *edge) bool {
+	if edge.polyType == Subject {
+		return self.clipFillType == EvenOdd
 	} else {
-		return self._SubjFillType == PolyFillType.EvenOdd
+		return self.subjFillType == EvenOdd
 	}
 }
 
-func (self *Clipper) isContributing(edge *edge) {
+func (self *Clipper) isContributing(edge *edge) bool {
 	var pft, pft2 PolyFillType
-	if edge.PolyType == PolyType.Subject {
-		pft = self._SubjFillType
-		pft2 = self._ClipFillType
+	if edge.polyType == Subject {
+		pft = self.subjFillType
+		pft2 = self.clipFillType
 	} else {
-		pft = self._ClipFillType
-		pft2 = self._SubjFillType
+		pft = self.clipFillType
+		pft2 = self.subjFillType
 	}
-	if pft == PolyFillType.EvenOdd || pft == PolyFillType.NonZero {
-		if abs(edge.windCnt) != 1 {
+	if pft == EvenOdd || pft == NonZero {
+		if intAbs(edge.windCnt) != 1 {
 			return false
 		}
-	} else if pft == PolyFillType.Positive {
+	} else if pft == Positive {
 		if edge.windCnt != 1 {
 			return false
 		}
-	} else if pft == PolyFillType.Negative {
+	} else if pft == Negative {
 		if edge.windCnt != -1 {
 			return false
 		}
 	}
 
-	if self._ClipType == ClipType.Intersection { //////////////////////
-		if pft2 == PolyFillType.EvenOdd || pft2 == PolyFillType.NonZero {
+	if self.clipType == Intersection { //////////////////////
+		if pft2 == EvenOdd || pft2 == NonZero {
 			return edge.windCnt2 != 0
-		} else if pft2 == PolyFillType.Positive {
+		} else if pft2 == Positive {
 			return edge.windCnt2 > 0
 		} else {
 			return edge.windCnt2 < 0 // Negative
 		}
-	} else if self._ClipType == ClipType.Union { //////////////////////
-		if pft2 == PolyFillType.EvenOdd || pft2 == PolyFillType.NonZero {
+	} else if self.clipType == Union { //////////////////////
+		if pft2 == EvenOdd || pft2 == NonZero {
 			return edge.windCnt2 == 0
-		} else if pft2 == PolyFillType.Positive {
+		} else if pft2 == Positive {
 			return edge.windCnt2 <= 0
 		} else {
 			return edge.windCnt2 >= 0 // Negative
 		}
-	} else if self._ClipType == ClipType.Difference { //////////////////////
-		if edge.PolyType == PolyType.Subject {
-			if pft2 == PolyFillType.EvenOdd || pft2 == PolyFillType.NonZero {
+	} else if self.clipType == Difference { //////////////////////
+		if edge.polyType == Subject {
+			if pft2 == EvenOdd || pft2 == NonZero {
 				return edge.windCnt2 == 0
-			} else if edge.PolyType == PolyFillType.Positive {
+			} else if pft2 == Positive {
 				return edge.windCnt2 <= 0
 			} else {
 				return edge.windCnt2 >= 0
 			}
 		} else {
-			if pft2 == PolyFillType.EvenOdd || pft2 == PolyFillType.NonZero {
+			if pft2 == EvenOdd || pft2 == NonZero {
 				return edge.windCnt2 != 0
-			} else if pft2 == PolyFillType.Positive {
+			} else if pft2 == Positive {
 				return edge.windCnt2 > 0
 			} else {
 				return edge.windCnt2 < 0
@@ -1276,7 +1321,7 @@ func (self *Clipper) addEdgeToSEL(edge *edge) {
 		edge.nextInSEL = nil
 	} else {
 		// add edge to front of list ...
-		edge.nextInSEL = self._SortedEdges
+		edge.nextInSEL = self.sortedEdges
 		edge.prevInSEL = nil
 		self.sortedEdges.prevInSEL = edge
 		self.sortedEdges = nil
@@ -1303,7 +1348,7 @@ func (self *Clipper) insertEdgeIntoAEL(edge *edge) {
 		self.activeEdges.prevInAEL = edge
 		self.activeEdges = edge
 	} else {
-		e := self._ActiveEdges
+		e := self.activeEdges
 		for e.nextInAEL != nil &&
 			!e2InsertsBeforeE1(e.nextInAEL, edge) {
 			e = e.nextInAEL
@@ -1317,13 +1362,13 @@ func (self *Clipper) insertEdgeIntoAEL(edge *edge) {
 	}
 }
 
-func (self *Clipper) insertLocalMinimaIntoAEL(botY *edge) {
+func (self *Clipper) insertLocalMinimaIntoAEL(botY int) {
 	for self.currentLocMin != nil &&
-		self.currentLocMin.y == botY {
-		lb := self._CurrentLocMin.leftBound
-		rb := self._CurrentLocMin.rightBound
+		self.currentLocMin.Y == botY {
+		lb := self.currentLocMin.leftBound
+		rb := self.currentLocMin.rightBound
 		self.insertEdgeIntoAEL(lb)
-		self.insertScanbeam(lb.Top.y)
+		self.insertScanbeam(lb.Top.Y)
 		self.insertEdgeIntoAEL(rb)
 		if self.isEvenOddFillType(lb) {
 			lb.windDelta = 1
@@ -1336,20 +1381,20 @@ func (self *Clipper) insertLocalMinimaIntoAEL(botY *edge) {
 		rb.windCnt2 = lb.windCnt2
 		if rb.dx == horizontal {
 			self.addEdgeToSEL(rb)
-			self.insertScanbeam(rb.nextInLML.Top.y)
+			self.insertScanbeam(rb.nextInLML.Top.Y)
 		} else {
-			self.insertScanbeam(rb.Top.y)
+			self.insertScanbeam(rb.Top.Y)
 		}
 		if self.isContributing(lb) {
-			self.addLocalMinPoly(lb, rb, Point(lb.Curr.x, self.currentLocMin.y))
+			self.addLocalMinPoly(lb, rb, &Point{lb.Curr.X, self.currentLocMin.Y})
 		}
 
-		if rb.outIdx >= 0 && rb.dx == horizontal && self._HorzJoins != nil {
-			hj = self._HorzJoins
+		if rb.outIdx >= 0 && rb.dx == horizontal && self.horzJoins != nil {
+			hj := self.horzJoins
 			for {
 				dummy1, dummy2, overlap := getOverlapSegment(hj.edge.Bot, hj.edge.Top, rb.Bot, rb.Top)
 				if overlap {
-					self._AddJoin(hj.edge, rb, hj.savedIdx, -1)
+					self.addJoin(hj.edge, rb, hj.savedIdx, -1)
 				}
 				hj = hj.nextHj
 				if hj == self.horzJoins {
@@ -1358,13 +1403,13 @@ func (self *Clipper) insertLocalMinimaIntoAEL(botY *edge) {
 			}
 		}
 		if lb.nextInAEL != rb {
-			if rb.outIdx >= 0 && rb.prevInAEL.outIdx >= 0 && _SlopesEqual2(rb.prevInAEL, rb) {
+			if rb.outIdx >= 0 && rb.prevInAEL.outIdx >= 0 && slopesEqual2(rb.prevInAEL, rb) {
 				self.addJoin(rb, rb.prevInAEL, -1, -1)
 			}
 			e := lb.nextInAEL
 			pt := lb.Curr
 			for e != rb {
-				self._IntersectEdges(rb, e, pt, Protects.Neither)
+				self.intersectEdges(rb, e, pt, protectsNeither)
 				e = e.nextInAEL
 			}
 		}
@@ -1483,10 +1528,10 @@ func (self *Clipper) swapPositionsInSEL(e1, e2 *edge) {
 	}
 }
 
-func (self *Clipper) isTopHorz(xPos float64) bool {
-	e = self.sortedEdges
+func (self *Clipper) isTopHorz(xPos int) bool {
+	e := self.sortedEdges
 	for e != nil {
-		if (xPos >= min(e.Curr.x, e.Top.x)) && (xPos <= max(e.Curr.x, e.Top.x)) {
+		if (xPos >= min(e.Curr.X, e.Top.X)) && (xPos <= max(e.Curr.X, e.Top.X)) {
 			return false
 		}
 		e = e.nextInSEL
@@ -1495,24 +1540,24 @@ func (self *Clipper) isTopHorz(xPos float64) bool {
 }
 
 func (self *Clipper) processHorizontal(horzEdge *edge) {
-	var horzLeft, horzRight *edge
-	var direction *Direction
-	if horzEdge.Curr.x < horzEdge.Top.x {
-		horzLeft = horzEdge.Curr.x
-		horzRight = horzEdge.Top.x
-		direction = Direction.LeftToRight
+	var horzLeft, horzRight int
+	var direction direction
+	if horzEdge.Curr.X < horzEdge.Top.X {
+		horzLeft = horzEdge.Curr.X
+		horzRight = horzEdge.Top.X
+		direction = leftToRight
 	} else {
-		horzLeft = horzEdge.Top.x
-		horzRight = horzEdge.Curr.x
-		direction = Direction.RightToLeft
+		horzLeft = horzEdge.Top.X
+		horzRight = horzEdge.Curr.X
+		direction = rightToLeft
 	}
-	eMaxPair := nil
+	var eMaxPair *edge
 	if horzEdge.nextInLML == nil {
-		eMaxPair = _GetMaximaPair(horzEdge)
+		eMaxPair = getMaximaPair(horzEdge)
 	}
 	e := getnextInAEL(horzEdge, direction)
 	for e != nil {
-		if (e.Curr.x == horzEdge.Top.x) && eMaxPair == nil {
+		if (e.Curr.X == horzEdge.Top.X) && eMaxPair == nil {
 			if slopesEqual2(e, horzEdge.nextInLML) {
 				if horzEdge.outIdx >= 0 && e.outIdx >= 0 {
 					self.addJoin(horzEdge.nextInLML, e, horzEdge.outIdx, -1)
@@ -1522,48 +1567,50 @@ func (self *Clipper) processHorizontal(horzEdge *edge) {
 				break
 			}
 		}
-		eNext = getnextInAEL(e, direction)
+		eNext := getnextInAEL(e, direction)
 		if eMaxPair != nil ||
-			((direction == Direction.LeftToRight) && (e.Curr.x < horzRight)) ||
-			((direction == Direction.RightToLeft) && (e.Curr.x > horzLeft)) {
+			((direction == leftToRight) && (e.Curr.X < horzRight)) ||
+			((direction == rightToLeft) && (e.Curr.X > horzLeft)) {
 			if e == eMaxPair {
-				if direction == Direction.LeftToRight {
-					self.intersectEdges(horzEdge, e, Point(e.Curr.x, horzEdge.Curr.y), protectsNeither)
+				if direction == leftToRight {
+					self.intersectEdges(horzEdge, e,
+						&Point{e.Curr.X, horzEdge.Curr.Y}, protectsNeither)
 				} else {
-					self.intersectEdges(e, horzEdge, Point(e.Curr.x, horzEdge.Curr.y), protectsNeither)
+					self.intersectEdges(e, horzEdge,
+						&Point{e.Curr.X, horzEdge.Curr.Y}, protectsNeither)
 				}
 				return
-			} else if e.dx == horizontal && !isMinima(e) && e.Curr.x <= e.Top.x {
-				if direction == Direction.LeftToRight {
-					self.intersectEdges(horzEdge, e, Point(e.Curr.x, horzEdge.Curr.y),
-						protectRight(!self.isTopHorz(e.Curr.x)))
+			} else if e.dx == horizontal && !isMinima(e) && e.Curr.X <= e.Top.X {
+				if direction == leftToRight {
+					self.intersectEdges(horzEdge, e, &Point{e.Curr.X, horzEdge.Curr.Y},
+						protectRight(!self.isTopHorz(e.Curr.X)))
 				} else {
-					self.intersectEdges(e, horzEdge, Point(e.Curr.x, horzEdge.Curr.y),
-						protectLeft(!self.isTopHorz(e.Curr.x)))
+					self.intersectEdges(e, horzEdge, &Point{e.Curr.X, horzEdge.Curr.Y},
+						protectLeft(!self.isTopHorz(e.Curr.X)))
 				}
-			} else if direction == Direction.LeftToRight {
-				self.intersectEdges(horzEdge, e, Point(e.Curr.x, horzEdge.Curr.y),
-					protectRight(!self.isTopHorz(e.Curr.x)))
+			} else if direction == leftToRight {
+				self.intersectEdges(horzEdge, e, &Point{e.Curr.X, horzEdge.Curr.Y},
+					protectRight(!self.isTopHorz(e.Curr.X)))
 			} else {
-				self.intersectEdges(e, horzEdge, Point(e.Curr.x, horzEdge.Curr.y),
-					protectLeft(!self.isTopHorz(e.Curr.x)))
+				self.intersectEdges(e, horzEdge, &Point{e.Curr.X, horzEdge.Curr.Y},
+					protectLeft(!self.isTopHorz(e.Curr.X)))
 			}
 			self.swapPositionsInAEL(horzEdge, e)
-		} else if (direction == Direction.LeftToRight && e.Curr.x >= horzRight) ||
-			(direction == Direction.RightToLeft && e.Curr.x <= horzLeft) {
+		} else if (direction == leftToRight && e.Curr.X >= horzRight) ||
+			(direction == rightToLeft && e.Curr.X <= horzLeft) {
 			break
 		}
 		e = eNext
 	}
 	if horzEdge.nextInLML != nil {
 		if horzEdge.outIdx >= 0 {
-			self._AddOutPt(horzEdge, horzEdge.Top)
+			self.addOutPt(horzEdge, horzEdge.Top)
 		}
 		self.updateEdgeIntoAEL(horzEdge)
 	} else {
 		if horzEdge.outIdx >= 0 {
-			self._IntersectEdges(horzEdge, eMaxPair,
-				Point(horzEdge.Top.x, horzEdge.Curr.y), protectsBoth)
+			self.intersectEdges(horzEdge, eMaxPair,
+				&Point{horzEdge.Top.X, horzEdge.Curr.Y}, protectsBoth)
 		}
 		if eMaxPair.outIdx >= 0 {
 			panic("Clipper: Horizontal Error")
@@ -1575,14 +1622,14 @@ func (self *Clipper) processHorizontal(horzEdge *edge) {
 
 func (self *Clipper) processHorizontals() {
 	for self.sortedEdges != nil {
-		e = self.sortedEdges
+		e := self.sortedEdges
 		self.deleteFromSEL(e)
 		self.processHorizontal(e)
 	}
 }
 
 func (self *Clipper) addJoin(e1, e2 *edge, e1OutIdx, e2OutIdx int) {
-	jr := JoinRec()
+	jr := new(joinRec)
 	if e1OutIdx >= 0 {
 		jr.poly1Idx = e1OutIdx
 	} else {
@@ -1598,13 +1645,13 @@ func (self *Clipper) addJoin(e1, e2 *edge, e1OutIdx, e2OutIdx int) {
 	jr.pt2a = e2.Curr
 	jr.pt2b = e2.Top
 	if self.joinList == nil {
-		self.joinList = make([]*JoinRec, 0)
+		self.joinList = make([]*joinRec, 0)
 	}
 	self.joinList = append(self.joinList, jr)
 }
 
-func (self *Clipper) fixupJoinRecs(jr *JoinRec, outPt *outPt, startIdx int) {
-	for i := startIdx; i < len(self._JoinList); i++ {
+func (self *Clipper) fixupJoinRecs(jr *joinRec, outPt *outPt, startIdx int) {
+	for i := startIdx; i < len(self.joinList); i++ {
 		jr2 := self.joinList[i]
 		if jr2.poly1Idx == jr.poly1Idx && pointIsVertex(jr2.pt1a, outPt) {
 			jr2.poly1Idx = jr.poly2Idx
@@ -1616,9 +1663,9 @@ func (self *Clipper) fixupJoinRecs(jr *JoinRec, outPt *outPt, startIdx int) {
 }
 
 func (self *Clipper) addHorzJoin(e *edge, idx int) {
-	hj := HorzJoin(e, idx)
-	if self._HorzJoins == nil {
-		self._HorzJoins = hj
+	hj := newHorzJoin(e, idx)
+	if self.horzJoins == nil {
+		self.horzJoins = hj
 		hj.nextHj = hj
 		hj.prevHj = hj
 	} else {
@@ -1630,16 +1677,16 @@ func (self *Clipper) addHorzJoin(e *edge, idx int) {
 }
 
 func (self *Clipper) insertIntersectNode(e1, e2 *edge, pt *Point) {
-	newNode := IntersectNode(e1, e2, pt)
+	newNode := &intersectNode{e1: e1, e2: e2, pt: pt}
 	if self.intersectNodes == nil {
 		self.intersectNodes = newNode
-	} else if newNode.pt.y > self._IntersectNodes.pt.y {
-		newNode.nextIn = self._IntersectNodes
+	} else if newNode.pt.Y > self.intersectNodes.pt.Y {
+		newNode.nextIn = self.intersectNodes
 		self.intersectNodes = newNode
 	} else {
-		node = self._IntersectNodes
+		node := self.intersectNodes
 		for node.nextIn != nil &&
-			newNode.pt.y < node.nextIn.pt.y {
+			newNode.pt.Y < node.nextIn.pt.Y {
 			node = node.nextIn
 		}
 		newNode.nextIn = node.nextIn
@@ -1647,7 +1694,7 @@ func (self *Clipper) insertIntersectNode(e1, e2 *edge, pt *Point) {
 	}
 }
 
-func (self *Clipper) processIntersections(botY, topY float64) bool {
+func (self *Clipper) processIntersections(botY, topY int) bool {
 	defer func() {
 		self.intersectNodes = nil
 		self.sortedEdges = nil
@@ -1664,7 +1711,7 @@ func (self *Clipper) processIntersections(botY, topY float64) bool {
 	return true
 }
 
-func (self *Clipper) buildIntersectList(botY, topY *edge) {
+func (self *Clipper) buildIntersectList(botY, topY int) {
 	e := self.activeEdges
 	if e == nil {
 		return
@@ -1673,7 +1720,7 @@ func (self *Clipper) buildIntersectList(botY, topY *edge) {
 	for e != nil {
 		e.prevInSEL = e.prevInAEL
 		e.nextInSEL = e.nextInAEL
-		e.Curr = Point(_TopX(e, topY), e.Curr.y)
+		e.Curr = &Point{topX(e, topY), e.Curr.Y}
 		e = e.nextInAEL
 	}
 	for {
@@ -1681,16 +1728,16 @@ func (self *Clipper) buildIntersectList(botY, topY *edge) {
 		e = self.sortedEdges
 		for e.nextInSEL != nil {
 			eNext := e.nextInSEL
-			if e.Curr.x <= eNext.Curr.x {
+			if e.Curr.X <= eNext.Curr.X {
 				e = eNext
 				continue
 			}
-			pt, intersected = intersectPoint(e, eNext)
-			if !intersected && e.Curr.x > eNext.Curr.x+1 {
+			pt, intersected := intersectPoint(e, eNext)
+			if !intersected && e.Curr.X > eNext.Curr.X+1 {
 				panic("Intersect Error")
 			}
-			if pt.y > botY {
-				pt = Point(_TopX(e, botY), botY)
+			if pt.Y > botY {
+				pt = &Point{topX(e, botY), botY}
 			}
 			self.insertIntersectNode(e, eNext, pt)
 			self.swapPositionsInSEL(e, eNext)
@@ -1757,15 +1804,15 @@ func (self *Clipper) deleteFromSEL(e *edge) {
 func (self *Clipper) intersectEdges(e1, e2 *edge, pt *Point, protect protects) {
 	e1stops := protect&protectsLeft == 0 &&
 		e1.nextInLML == nil &&
-		e1.Top.x == pt.x && e1.Top.y == pt.y
+		e1.Top.X == pt.X && e1.Top.Y == pt.Y
 	e2stops := protect&protectsRight == 0 &&
 		e2.nextInLML == nil &&
-		e2.Top.x == pt.x && e2.Top.y == pt.y
+		e2.Top.X == pt.X && e2.Top.Y == pt.Y
 	e1Contributing := e1.outIdx >= 0
 	e2contributing := e2.outIdx >= 0
 
-	if e1.PolyType == e2.PolyType {
-		if self._IsEvenOddFillType(e1) {
+	if e1.polyType == e2.polyType {
+		if self.isEvenOddFillType(e1) {
 			e1Wc := e1.windCnt
 			e1.windCnt = e2.windCnt
 			e2.windCnt = e1Wc
@@ -1797,41 +1844,42 @@ func (self *Clipper) intersectEdges(e1, e2 *edge, pt *Point, protect protects) {
 			e2.windCnt2 = 0
 		}
 	}
-	var e1FillType, e1FillType2 FillType
-	if e1.PolyType == PolyType.Subject {
+	var e1FillType, e1FillType2, e2FillType, e2FillType2 PolyFillType
+	if e1.polyType == Subject {
 		e1FillType = self.subjFillType
 		e1FillType2 = self.clipFillType
 	} else {
 		e1FillType = self.clipFillType
 		e1FillType2 = self.subjFillType
 	}
-	if e2.PolyType == PolyType.Subject {
+	if e2.polyType == Subject {
 		e2FillType = self.subjFillType
 		e2FillType2 = self.clipFillType
 	} else {
 		e2FillType = self.clipFillType
 		e2FillType2 = self.subjFillType
 	}
-	if e1FillType == PolyFillType.Positive {
+	var e1Wc, e2Wc int
+	if e1FillType == Positive {
 		e1Wc = e1.windCnt
-	} else if e1FillType == PolyFillType.Negative {
+	} else if e1FillType == Negative {
 		e1Wc = -e1.windCnt
 	} else {
-		e1Wc = abs(e1.windCnt)
+		e1Wc = intAbs(e1.windCnt)
 	}
 
-	if e2FillType == PolyFillType.Positive {
+	if e2FillType == Positive {
 		e2Wc = e2.windCnt
-	} else if e2FillType == PolyFillType.Negative {
+	} else if e2FillType == Negative {
 		e2Wc = -e2.windCnt
 	} else {
-		e2Wc = abs(e2.windCnt)
+		e2Wc = intAbs(e2.windCnt)
 	}
 
 	if e1Contributing && e2contributing {
 		if e1stops || e2stops ||
 			(e1Wc != 0 && e1Wc != 1) || (e2Wc != 0 && e2Wc != 1) ||
-			(e1.PolyType != e2.PolyType && self._ClipType != ClipType.Xor) {
+			(e1.polyType != e2.polyType && self.clipType != Xor) {
 			self.addLocalMaxPoly(e1, e2, pt)
 		} else {
 			self.addOutPt(e1, pt)
@@ -1854,48 +1902,49 @@ func (self *Clipper) intersectEdges(e1, e2 *edge, pt *Point, protect protects) {
 	} else if (e1Wc == 0 || e1Wc == 1) && (e2Wc == 0 || e2Wc == 1) &&
 		!e1stops && !e2stops {
 
-		e1FillType2, e2FillType2 = PolyFillType.EvenOdd, PolyFillType.EvenOdd
-		if e1FillType2 == PolyFillType.Positive {
+		e1FillType2, e2FillType2 = EvenOdd, EvenOdd
+		var e1Wc2, e2Wc2 int
+		if e1FillType2 == Positive {
 			e1Wc2 = e1.windCnt2
-		} else if e1FillType2 == PolyFillType.Negative {
+		} else if e1FillType2 == Negative {
 			e1Wc2 = -e1.windCnt2
 		} else {
-			e1Wc2 = abs(e1.windCnt2)
+			e1Wc2 = intAbs(e1.windCnt2)
 		}
-		if e2FillType2 == PolyFillType.Positive {
+		if e2FillType2 == Positive {
 			e2Wc2 = e2.windCnt2
-		} else if e2FillType2 == PolyFillType.Negative {
+		} else if e2FillType2 == Negative {
 			e2Wc2 = -e2.windCnt2
 		} else {
-			e2Wc2 = abs(e2.windCnt2)
+			e2Wc2 = intAbs(e2.windCnt2)
 		}
 
-		if e1.PolyType != e2.PolyType {
+		if e1.polyType != e2.polyType {
 			self.addLocalMinPoly(e1, e2, pt)
 		} else if e1Wc == 1 && e2Wc == 1 {
-			if self._ClipType == ClipType.Intersection {
+			if self.clipType == Intersection {
 				if e1Wc2 > 0 && e2Wc2 > 0 {
 					self.addLocalMinPoly(e1, e2, pt)
 				}
-			} else if self.clipType == ClipType.Union {
+			} else if self.clipType == Union {
 				if e1Wc2 <= 0 && e2Wc2 <= 0 {
-					self._AddLocalMinPoly(e1, e2, pt)
+					self.addLocalMinPoly(e1, e2, pt)
 				}
-			} else if self._ClipType == ClipType.Difference {
-				if (e1.PolyType == PolyType.Clip && e1Wc2 > 0 && e2Wc2 > 0) ||
-					(e1.PolyType == PolyType.Subject && e1Wc2 <= 0 && e2Wc2 <= 0) {
+			} else if self.clipType == Difference {
+				if (e1.polyType == Clip && e1Wc2 > 0 && e2Wc2 > 0) ||
+					(e1.polyType == Subject && e1Wc2 <= 0 && e2Wc2 <= 0) {
 					self.addLocalMinPoly(e1, e2, pt)
 				}
 			} else {
 				self.addLocalMinPoly(e1, e2, pt)
 			}
 		} else {
-			swapSides(e1, e2, self.polyOutList)
+			swapSides(e1, e2) //, self.polyOutList)
 		}
 	}
 	if e1stops != e2stops &&
 		((e1stops && e1.outIdx >= 0) || (e2stops && e2.outIdx >= 0)) {
-		swapSides(e1, e2, self._PolyOutList)
+		swapSides(e1, e2) //, self.polyOutList)
 		swapPolyIndexes(e1, e2)
 	}
 	if e1stops {
@@ -1906,15 +1955,15 @@ func (self *Clipper) intersectEdges(e1, e2 *edge, pt *Point, protect protects) {
 	}
 }
 
-func (self *Clipper) doMaxima(e *edge, topY float64) {
+func (self *Clipper) doMaxima(e *edge, topY int) {
 	eMaxPair := getMaximaPair(e)
-	x := e.Top.x
+	x := e.Top.X
 	eNext := e.nextInAEL
 	for eNext != eMaxPair {
 		if eNext == nil {
 			panic("DoMaxima error")
 		}
-		self.intersectEdges(e, eNext, Point(x, topY), Protects.Both)
+		self.intersectEdges(e, eNext, &Point{x, topY}, protectsBoth)
 		self.swapPositionsInAEL(e, eNext)
 		eNext = e.nextInAEL
 	}
@@ -1922,13 +1971,13 @@ func (self *Clipper) doMaxima(e *edge, topY float64) {
 		self.deleteFromAEL(e)
 		self.deleteFromAEL(eMaxPair)
 	} else if e.outIdx >= 0 && eMaxPair.outIdx >= 0 {
-		self.intersectEdges(e, eMaxPair, Point(x, topY), Protects.Neither)
+		self.intersectEdges(e, eMaxPair, &Point{x, topY}, protectsNeither)
 	} else {
 		panic("DoMaxima error")
 	}
 }
 
-func (self *Clipper) updateEdgeIntoAEL(e *edge) {
+func (self *Clipper) updateEdgeIntoAEL(e *edge) *edge {
 	if e.nextInLML == nil {
 		panic("UpdateEdgeIntoAEL error")
 	}
@@ -1951,18 +2000,18 @@ func (self *Clipper) updateEdgeIntoAEL(e *edge) {
 	e.prevInAEL = aelPrev
 	e.nextInAEL = aelNext
 	if e.dx != horizontal {
-		self.insertScanbeam(e.Top.y)
+		self.insertScanbeam(e.Top.Y)
 	}
 	return e
 }
 
 func (self *Clipper) addLocalMinPoly(e1, e2 *edge, pt *Point) {
-	var e *edge
+	var e, prevE *edge
 	if e2.dx == horizontal || e1.dx > e2.dx {
 		self.addOutPt(e1, pt)
 		e2.outIdx = e1.outIdx
-		e1.side = EdgeSide.Left
-		e2.side = EdgeSide.Right
+		e1.side = leftEdge
+		e2.side = rightEdge
 		e = e1
 		if e.prevInAEL == e2 {
 			prevE = e2.prevInAEL
@@ -1972,8 +2021,8 @@ func (self *Clipper) addLocalMinPoly(e1, e2 *edge, pt *Point) {
 	} else {
 		self.addOutPt(e2, pt)
 		e1.outIdx = e2.outIdx
-		e1.side = EdgeSide.Right
-		e2.side = EdgeSide.Left
+		e1.side = rightEdge
+		e2.side = leftEdge
 		e = e2
 		if e.prevInAEL == e1 {
 			prevE = e1.prevInAEL
@@ -1982,7 +2031,7 @@ func (self *Clipper) addLocalMinPoly(e1, e2 *edge, pt *Point) {
 		}
 	}
 	if prevE != nil && prevE.outIdx >= 0 &&
-		topX(prevE, pt.y) == topX(e, pt.y) &&
+		topX(prevE, pt.Y) == topX(e, pt.Y) &&
 		slopesEqual2(e, prevE) {
 		self.addJoin(e, prevE, -1, -1)
 	}
@@ -2001,36 +2050,37 @@ func (self *Clipper) addLocalMaxPoly(e1, e2 *edge, pt *Point) {
 	}
 }
 
-func (self *Clipper) createOutRec() *OutRec {
-	outRec = OutRec(len(self.polyOutList))
-	self.polyOutList = append(self.polyOutList, outRec)
-	return outRec
+func (self *Clipper) createOutRec() *outRec {
+	outrec := newOutRec(len(self.polyOutList))
+	self.polyOutList = append(self.polyOutList, outrec)
+	return outrec
 }
 
 func (self *Clipper) addOutPt(e *edge, pt *Point) {
-	toFront := e.side == EdgeSide.Left
+	toFront := e.side == leftEdge
+	var outrec *outRec
 	if e.outIdx < 0 {
-		outRec = self.createOutRec()
-		e.outIdx = outRec.idx
-		op := OutPt(outRec.idx, pt)
+		outrec = self.createOutRec()
+		e.outIdx = outrec.idx
+		op := newOutPt(outrec.idx, pt)
 		op.nextOp = op
 		op.prevOp = op
-		outRec.pts = op
-		setHoleState(e, outRec, self._PolyOutList)
+		outrec.pts = op
+		setHoleState(e, outrec, self.polyOutList)
 	} else {
-		outRec = self.polyOutList[e.outIdx]
-		op := outRec.pts
-		if (toFront && _PointsEqual(pt, op.pt)) ||
-			(!toFront && _PointsEqual(pt, op.prevOp.pt)) {
+		outrec = self.polyOutList[e.outIdx]
+		op := outrec.pts
+		if (toFront && pointsEqual(pt, op.pt)) ||
+			(!toFront && pointsEqual(pt, op.prevOp.pt)) {
 			return
 		}
-		op2 := OutPt(outRec.idx, pt)
+		op2 := newOutPt(outrec.idx, pt)
 		op2.nextOp = op
 		op2.prevOp = op.prevOp
 		op.prevOp.nextOp = op2
 		op.prevOp = op2
 		if toFront {
-			outRec.pts = op2
+			outrec.pts = op2
 		}
 	}
 }
@@ -2038,7 +2088,7 @@ func (self *Clipper) addOutPt(e *edge, pt *Point) {
 func (self *Clipper) appendPolygon(e1, e2 *edge) {
 	outRec1 := self.polyOutList[e1.outIdx]
 	outRec2 := self.polyOutList[e2.outIdx]
-	var holeStateRec *OutRec
+	var holeStateRec *outRec
 	if param1RightOfParam2(outRec1, outRec2) {
 		holeStateRec = outRec2
 	} else if param1RightOfParam2(outRec2, outRec1) {
@@ -2051,10 +2101,10 @@ func (self *Clipper) appendPolygon(e1, e2 *edge) {
 	p2_lft := outRec2.pts
 	p1_rt := p1_lft.prevOp
 	p2_rt := p2_lft.prevOp
-	newSide := EdgeSide.Left
+	newSide := leftEdge
 
-	if e1.side == EdgeSide.Left {
-		if e2.side == EdgeSide.Left {
+	if e1.side == leftEdge {
+		if e2.side == leftEdge {
 			// z y x a b c
 			reversePolyPtLinks(p2_lft)
 			p2_lft.nextOp = p1_lft
@@ -2071,10 +2121,10 @@ func (self *Clipper) appendPolygon(e1, e2 *edge) {
 			outRec1.pts = p2_lft
 		}
 	} else {
-		newSide = EdgeSide.Right
-		if e2.side == EdgeSide.Right {
+		newSide = rightEdge
+		if e2.side == rightEdge {
 			// a b c z y x
-			_ReversePolyPtLinks(p2_lft)
+			reversePolyPtLinks(p2_lft)
 			p1_rt.nextOp = p2_rt
 			p2_rt.prevOp = p1_rt
 			p2_lft.nextOp = p1_lft
@@ -2097,13 +2147,13 @@ func (self *Clipper) appendPolygon(e1, e2 *edge) {
 	outRec2.pts = nil
 	outRec2.bottomPt = nil
 	outRec2.FirstLeft = outRec1
-	OKIdx = outRec1.idx
-	ObsoleteIdx = outRec2.idx
+	OKIdx := outRec1.idx
+	ObsoleteIdx := outRec2.idx
 
 	e1.outIdx = -1
 	e2.outIdx = -1
 
-	e = self._ActiveEdges
+	e := self.activeEdges
 	for e != nil {
 		if e.outIdx == ObsoleteIdx {
 			e.outIdx = OKIdx
@@ -2120,8 +2170,8 @@ func (self *Clipper) fixupIntersectionOrder() bool {
 	inode := self.intersectNodes
 	for inode != nil {
 		if !edgesAdjacent(inode) {
-			nextNode = inode.nextIn
-			for nextNode && !edgesAdjacent(nextNode) {
+			nextNode := inode.nextIn
+			for nextNode != nil && !edgesAdjacent(nextNode) {
 				nextNode = nextNode.nextIn
 			}
 			if nextNode == nil {
@@ -2143,8 +2193,9 @@ func (self *Clipper) fixupIntersectionOrder() bool {
 	return true
 }
 
-func (self *Clipper) processEdgesAtTopOfScanbeam(topY float64) {
-	e := self._ActiveEdges
+func (self *Clipper) processEdgesAtTopOfScanbeam(topY int) {
+	e := self.activeEdges
+	var ePrev, eNext *edge
 	for e != nil {
 		if isMaxima(e, topY) && getMaximaPair(e).dx != horizontal {
 			ePrev = e.prevInAEL
@@ -2178,14 +2229,14 @@ func (self *Clipper) processEdgesAtTopOfScanbeam(topY float64) {
 				e = self.updateEdgeIntoAEL(e)
 				self.addEdgeToSEL(e)
 			} else {
-				e.Curr = Point(topX(e, topY), topY)
+				e.Curr = &Point{topX(e, topY), topY}
 				if self.ForceSimple && e.prevInAEL != nil &&
-					e.prevInAEL.Curr.x == e.Curr.x &&
+					e.prevInAEL.Curr.X == e.Curr.X &&
 					e.outIdx >= 0 && e.prevInAEL.outIdx >= 0 {
 					if intermediateVert {
-						self.addOutPt(e.prevInAEL, Point(e.Curr.x, topY))
+						self.addOutPt(e.prevInAEL, &Point{e.Curr.X, topY})
 					} else {
-						self.addOutPt(e, Point(e.Curr.x, topY))
+						self.addOutPt(e, &Point{e.Curr.X, topY})
 					}
 				}
 			}
@@ -2204,15 +2255,15 @@ func (self *Clipper) processEdgesAtTopOfScanbeam(topY float64) {
 
 			ePrev = e.prevInAEL
 			eNext = e.nextInAEL
-			if ePrev != nil && ePrev.Curr.x == e.Bot.x &&
-				(ePrev.Curr.y == e.Bot.y) && (e.outIdx >= 0) &&
-				(ePrev.outIdx >= 0) && (ePrev.Curr.y > ePrev.Top.y) &&
+			if ePrev != nil && ePrev.Curr.X == e.Bot.X &&
+				(ePrev.Curr.Y == e.Bot.Y) && (e.outIdx >= 0) &&
+				(ePrev.outIdx >= 0) && (ePrev.Curr.Y > ePrev.Top.Y) &&
 				slopesEqual2(e, ePrev) {
 				self.addOutPt(ePrev, e.Bot)
 				self.addJoin(e, ePrev, -1, -1)
-			} else if eNext != nil && (eNext.Curr.x == e.Bot.x) &&
-				(eNext.Curr.y == e.Bot.y) && (e.outIdx >= 0) &&
-				(eNext.outIdx >= 0) && (eNext.Curr.y > eNext.Top.y) &&
+			} else if eNext != nil && (eNext.Curr.X == e.Bot.X) &&
+				(eNext.Curr.Y == e.Bot.Y) && (e.outIdx >= 0) &&
+				(eNext.outIdx >= 0) && (eNext.Curr.Y > eNext.Top.Y) &&
 				slopesEqual2(e, eNext) {
 				self.addOutPt(eNext, e.Bot)
 				self.addJoin(e, eNext, -1, -1)
@@ -2223,11 +2274,11 @@ func (self *Clipper) processEdgesAtTopOfScanbeam(topY float64) {
 }
 
 // see http://www.mathopenref.com/coordpolygonarea2.html
-func (self *Clipper) area(pts []*Point) {
+func (self *Clipper) area(pts *outPt) float64 {
 	result := 0.0
 	p := pts
 	for {
-		result += (p.pt.x + p.prevOp.pt.x) * (p.prevOp.pt.y - p.pt.y)
+		result += float64((p.pt.X + p.prevOp.pt.X) * (p.prevOp.pt.Y - p.pt.Y))
 		p = p.nextOp
 		if p == pts {
 			break
@@ -2236,8 +2287,9 @@ func (self *Clipper) area(pts []*Point) {
 	return result / 2.
 }
 
-func (self *Clipper) joinPoints(jr *JoinRecord) (*Point, *Point, bool) {
-	var p1, p2 *Point
+func (self *Clipper) joinPoints(jr *joinRec) (*outPt, *outPt, bool) {
+	var p1, p2, p3, p4 *outPt
+	var result bool
 	outRec1 := self.polyOutList[jr.poly1Idx]
 	outRec2 := self.polyOutList[jr.poly2Idx]
 	if outRec1 == nil || outRec2 == nil {
@@ -2270,7 +2322,7 @@ func (self *Clipper) joinPoints(jr *JoinRecord) (*Point, *Point, bool) {
 		return p1, p2, false
 	}
 
-	prevOp = pp1a.prevOp
+	prevOp := pp1a.prevOp
 	if pointsEqual(pp1a.pt, pt1) {
 		p1 = pp1a
 	} else if pointsEqual(prevOp.pt, pt1) {
@@ -2327,7 +2379,7 @@ func (self *Clipper) joinPoints(jr *JoinRecord) (*Point, *Point, bool) {
 	return p1, p2, false
 }
 
-func (self *Clipper) fixupFirstLefts1(oldOutRec, newOutRec *OutRec) {
+func (self *Clipper) fixupFirstLefts1(oldOutRec, newOutRec *outRec) {
 	for _, outRec := range self.polyOutList {
 		if outRec.pts != nil && outRec.FirstLeft == oldOutRec {
 			if poly2ContainsPoly1(outRec.pts, newOutRec.pts) {
@@ -2337,7 +2389,7 @@ func (self *Clipper) fixupFirstLefts1(oldOutRec, newOutRec *OutRec) {
 	}
 }
 
-func (self *Clipper) fixupFirstLefts2(oldOutRec, newOutRec *OutRec) {
+func (self *Clipper) fixupFirstLefts2(oldOutRec, newOutRec *outRec) {
 	for _, outRec := range self.polyOutList {
 		if outRec.FirstLeft == oldOutRec {
 			outRec.FirstLeft = newOutRec
@@ -2345,23 +2397,24 @@ func (self *Clipper) fixupFirstLefts2(oldOutRec, newOutRec *OutRec) {
 	}
 }
 
-func (self *Clipper) getOutRec(idx int) *OutRec {
+func (self *Clipper) getOutRec(idx int) *outRec {
 	outrec := self.polyOutList[idx]
-	for outrec != self._PolyOutList[outrec.idx] {
-		outrec = self._PolyOutList[outrec.idx]
+	for outrec != self.polyOutList[outrec.idx] {
+		outrec = self.polyOutList[outrec.idx]
 	}
 	return outrec
 }
 
 func (self *Clipper) joinCommonEdges() {
 	for i := 0; i < len(self.joinList); i++ {
-		jr := self._JoinList[i]
-		outRec1 := self._GetOutRec(jr.poly1Idx)
-		outRec2 := self._GetOutRec(jr.poly2Idx)
+		jr := self.joinList[i]
+		outRec1 := self.getOutRec(jr.poly1Idx)
+		outRec2 := self.getOutRec(jr.poly2Idx)
 		if outRec1.pts == nil || outRec2.pts == nil {
 			continue
 		}
 
+		var holeStateRec *outRec
 		if outRec1 == outRec2 {
 			holeStateRec = outRec1
 		} else if param1RightOfParam2(outRec1, outRec2) {
@@ -2397,7 +2450,8 @@ func (self *Clipper) joinCommonEdges() {
 				fixupOutPolygon(outRec1)
 				fixupOutPolygon(outRec2)
 
-				if (outRec2.isHole ^ self.ReverseSolution) == self.area(outRec2) > 0.0 {
+				if (outRec2.isHole != self.ReverseSolution) ==
+					(self.area(outRec2.pts) > 0.0) {
 					reversePolyPtLinks(outRec2.pts)
 				}
 
@@ -2416,7 +2470,8 @@ func (self *Clipper) joinCommonEdges() {
 				fixupOutPolygon(outRec1)
 				fixupOutPolygon(outRec2)
 
-				if (outRec1.isHole ^ self.ReverseSolution) == self.area(outRec1) > 0.0 {
+				if (outRec1.isHole != self.ReverseSolution) ==
+					(self.area(outRec1.pts) > 0.0) {
 					reversePolyPtLinks(outRec1.pts)
 				}
 			} else {
@@ -2453,10 +2508,10 @@ func (self *Clipper) joinCommonEdges() {
 
 func (self *Clipper) doSimplePolygons() {
 	i := 0
-	for i < len(self._PolyOutList) {
-		outrec := self._PolyOutList[i]
+	for i < len(self.polyOutList) {
+		outrec := self.polyOutList[i]
 		i += 1
-		op = outrec.pts
+		op := outrec.pts
 		if op == nil {
 			continue
 		}
@@ -2473,7 +2528,7 @@ func (self *Clipper) doSimplePolygons() {
 					op3.nextOp = op2
 
 					outrec.pts = op
-					outrec2 = self.createOutRec()
+					outrec2 := self.createOutRec()
 					outrec2.pts = op2
 					updateOutPtIdxs(outrec2)
 					if poly2ContainsPoly1(outrec2.pts, outrec.pts) {
@@ -2537,7 +2592,7 @@ func (self *Clipper) executeInternal() bool {
 		if outRec.pts == nil {
 			continue
 		}
-		if (outRec.isHole ^ self.ReverseSolution) == (self._Area(outRec.pts) > 0.0) {
+		if (outRec.isHole != self.ReverseSolution) == (self.area(outRec.pts) > 0.0) {
 			reversePolyPtLinks(outRec.pts)
 		}
 	}
@@ -2554,7 +2609,7 @@ func (self *Clipper) executeInternal() bool {
 
 func (self *Clipper) Execute(
 	clipType ClipType,
-	solution []*Point,
+	solution [][]*Point,
 	subjFillType,
 	clipFillType PolyFillType) bool {
 	if self.executeLocked {
@@ -2581,15 +2636,15 @@ func (self *Clipper) Execute(
 
 func (self *Clipper) Execute2(
 	clipType ClipType,
-	solutionTree []*Point,
+	solutionTree *PolyTree,
 	subjFillType,
 	clipFillType PolyFillType) bool {
 	if self.executeLocked {
 		return false
 	}
 	defer func() {
-		self._ExecuteLocked = false
-		self._UsingPolyTree = false
+		self.executeLocked = false
+		self.usingPolyTree = false
 	}()
 	self.executeLocked = true
 	self.usingPolyTree = true
@@ -2614,7 +2669,7 @@ func (self *Clipper) buildResult(polygons [][]*Point) {
 		if cnt < 3 {
 			continue
 		}
-		poly := make([][]*Point, 0)
+		poly := make([]*Point, 0)
 		op := outRec.pts
 		for i := 0; i < cnt; i++ {
 			poly = append(poly, op.pt)
@@ -2636,13 +2691,13 @@ func (self *Clipper) buildResult2(polyTree *PolyTree) {
 		}
 		fixHoleLinkage(outRec)
 
-		// add nodes to _AllNodes list ...
-		polyNode := PolyNode()
+		// add nodes to allNodes list ...
+		polyNode := new(PolyNode)
 		polyTree.allNodes = append(polyTree.allNodes, polyNode)
-		outRec.PolyNode = polyNode
-		op = outRec.pts
+		outRec.polyNode = polyNode
+		op := outRec.pts
 		for {
-			polyNode.Contour = append(polyNode.Countour, op.pt)
+			polyNode.Contour = append(polyNode.Contour, op.pt)
 			op = op.prevOp
 			if op == outRec.pts {
 				break
@@ -2651,13 +2706,13 @@ func (self *Clipper) buildResult2(polyTree *PolyTree) {
 	}
 	// build the tree ...
 	for _, outRec := range self.polyOutList {
-		if outRec.PolyNode == nil {
+		if outRec.polyNode == nil {
 			continue
 		}
 		if outRec.FirstLeft == nil {
-			polyTree.addChild(outRec.PolyNode)
+			polyTree.addChild(outRec.polyNode)
 		} else {
-			outRec.FirstLeft.PolyNode.addChild(outRec.PolyNode)
+			outRec.FirstLeft.polyNode.addChild(outRec.polyNode)
 		}
 	}
 	return
@@ -2668,25 +2723,25 @@ func (self *Clipper) buildResult2(polyTree *PolyTree) {
 //===============================================================================
 
 func getUnitNormal(pt1, pt2 *Point) *FloatPoint {
-	if pt2.x == pt1.x && pt2.y == pt1.y {
+	if pt2.X == pt1.X && pt2.Y == pt1.Y {
 		return &FloatPoint{0.0, 0.0}
 	}
-	dx := float(pt2.x - pt1.x)
-	dy := float(pt2.y - pt1.y)
+	dx := float64(pt2.X - pt1.X)
+	dy := float64(pt2.Y - pt1.Y)
 	f := 1.0 / math.Hypot(dx, dy)
-	dx = float(dx) * f
-	dy = float(dy) * f
+	dx = float64(dx) * f
+	dy = float64(dy) * f
 	return &FloatPoint{dy, -dx}
 }
 
-func getBounds(pts []*Point) *rect {
-	var left, top, right, bottom *edge
+func getBounds(pts [][]*Point) *rect {
+	var left, top, right, bottom int
 	for _, poly := range pts {
 		for _, pt := range poly {
-			left = pt.x
-			top = pt.y
-			right = pt.x
-			bottom = pt.y
+			left = pt.X
+			top = pt.Y
+			right = pt.X
+			bottom = pt.Y
 			break
 		}
 		break
@@ -2694,32 +2749,28 @@ func getBounds(pts []*Point) *rect {
 
 	for _, poly := range pts {
 		for _, pt := range poly {
-			if pt.x < left {
-				left = pt.x
+			if pt.X < left {
+				left = pt.X
 			}
-			if pt.x > right {
-				right = pt.x
+			if pt.X > right {
+				right = pt.X
 			}
-			if pt.y < top {
-				top = pt.y
+			if pt.Y < top {
+				top = pt.Y
 			}
-			if pt.y > bottom {
-				bottom = pt.y
+			if pt.Y > bottom {
+				bottom = pt.Y
 			}
 		}
 	}
-	if left == nil {
-		return Rect(0, 0, 0, 0)
-	} else {
-		return Rect(left, top, right, bottom)
-	}
+	return &rect{left, top, right, bottom}
 }
 
 func getLowestPt(poly []*Point) *Point {
 	// precondition: poly must not be empty
 	result := poly[0]
 	for _, pt := range poly {
-		if pt.y > result.y || (pt.y == result.y && pt.x < result.x) {
+		if pt.Y > result.Y || (pt.Y == result.Y && pt.X < result.X) {
 			result = pt
 		}
 	}
@@ -2735,7 +2786,7 @@ func stripDupPts(poly []*Point) []*Point {
 			poly = append(poly[:i], poly[i+1:]...) // remove item i
 		}
 	}
-	i = len(poly) - 1
+	i := len(poly) - 1
 	for i > 0 && pointsEqual(poly[i], poly[0]) {
 		poly = append(poly[:i], poly[i+1:]...) // remove item i
 		i -= 1
@@ -2743,49 +2794,53 @@ func stripDupPts(poly []*Point) []*Point {
 	return poly
 }
 
-func offsetInternal(polys [][]*Point, isPolygon bool, delta int, jointype JoinType, endtype EndType, limit float64) []*Point {
+func offsetInternal(polys []*outRec, isPolygon bool, delta int,
+	jointype JoinType, endtype EndType, limit float64) []*Point {
 
+	var sinA, mcos, msin, step360 float64
+	var Normals []*Point
+	var k, j int
+	var result []*Point
 	doSquare := func(pt *Point) {
 		// see offset_triginometry.svg in the documentation folder ...
 		dx := math.Tan(math.Atan2(sinA,
-			Normals[k].x*Normals[j].x+Normals[k].y*Normals[j].y) / 4)
-		result = append(result, Point(
-			round(pt.x+delta*(Normals[k].x-Normals[k].y*dx)),
-			round(pt.y+delta*(Normals[k].y+Normals[k].x*dx))))
-		result = append(result, Point(
-			round(pt.x+delta*(Normals[j].x+Normals[j].y*dx)),
-			round(pt.y+delta*(Normals[j].y-Normals[j].x*dx))))
+			Normals[k].X*Normals[j].X+Normals[k].Y*Normals[j].Y) / 4)
+		result = append(result, &Point{
+			round(pt.X + delta*(Normals[k].X-Normals[k].Y*dx)),
+			round(pt.Y + delta*(Normals[k].Y+Normals[k].X*dx))})
+		result = append(result, &Point{
+			round(pt.X + delta*(Normals[j].X+Normals[j].Y*dx)),
+			round(pt.Y + delta*(Normals[j].Y-Normals[j].X*dx))})
 		return
 	}
 
 	doMiter := func(pt *Point, r float64) {
 		q := delta / r
-		result = append(result, Point(
-			round(pt.x+(Normals[k].x+Normals[j].x)*q),
-			round(pt.y+(Normals[k].y+Normals[j].y)*q)))
+		result = append(result, &Point{
+			round(pt.X + (Normals[k].X+Normals[j].X)*q),
+			round(pt.Y + (Normals[k].Y+Normals[j].Y)*q)})
 		return
 	}
 
-doRound:
-	+func(pt) {
-		a = math.Atan2(sinA,
-			Normals[k].x*Normals[j].x+Normals[k].y*Normals[j].y)
-		steps = round(step360 * abs(a))
-		X, Y = Normals[k].x, Normals[k].y
+	doRound := func(pt *Point) {
+		a := math.Atan2(sinA,
+			Normals[k].X*Normals[j].X+Normals[k].Y*Normals[j].Y)
+		steps := round(step360 * math.Abs(a))
+		X, Y := Normals[k].X, Normals[k].Y
 		for i := 0; i < steps; i++ {
-			result = append(result, Point(
-				round(pt.x+X*delta), round(pt.y+Y*delta)))
-			X2 = X
+			result = append(result, &Point{
+				round(pt.X + X*delta), round(pt.Y + Y*delta)})
+			X2 := X
 			X = X*mcos - msin*Y
 			Y = X2*msin + Y*mcos
 		}
-		result = append(result, Point(round(pt.x+Normals[j].x*delta),
-			round(pt.y+Normals[j].y*delta)))
+		result = append(result, &Point{round(pt.X + Normals[j].X*delta),
+			round(pt.Y + Normals[j].Y*delta)})
 		return
 	}
 
 	GetSin := func() float64 {
-		result := (Normals[k].x*Normals[j].y - Normals[j].x*Normals[k].y)
+		result := (Normals[k].X*Normals[j].Y - Normals[j].X*Normals[k].Y)
 		if result > 1.0 {
 			result = 1.0
 		} else if result < -1.0 {
@@ -2796,13 +2851,13 @@ doRound:
 
 	offsetPoint := func(jointype JoinType) (j int) {
 		if sinA*delta < 0 {
-			result = append(result, Point(round(pts[j].x+Normals[k].x*delta),
-				round(pts[j].y+Normals[k].y*delta)))
+			result = append(result, &Point{round(pts[j].X + Normals[k].X*delta),
+				round(pts[j].Y + Normals[k].Y*delta)})
 			result = append(result, pts[j])
-			result = append(result, Point(round(pts[j].x+Normals[j].x*delta),
-				round(pts[j].y+Normals[j].y*delta)))
+			result = append(result, &Point{round(pts[j].X + Normals[j].X*delta),
+				round(pts[j].Y + Normals[j].Y*delta)})
 		} else if jointype == JoinType.Miter {
-			r := 1.0 + (Normals[j].x*Normals[k].x + Normals[j].y*Normals[k].y)
+			r := 1.0 + (Normals[j].X*Normals[k].X + Normals[j].Y*Normals[k].Y)
 			if r >= miterLim {
 				doMiter(pts[j], r)
 			} else {
@@ -2838,8 +2893,8 @@ doRound:
 	if jointype == JoinType.Round || endtype == EndType.Round {
 		if limit <= 0 {
 			limit = 0.25
-		} else if limit > abs(delta)*0.25 {
-			limit = abs(delta) * 0.25
+		} else if limit > math.Abs(delta)*0.25 {
+			limit = math.Abs(delta) * 0.25
 		}
 		// step360: see offset_triginometry2.svg in the documentation folder ...
 		step360 := math.Pi / math.Acos(1-limit/abs(delta))
@@ -2866,8 +2921,8 @@ doRound:
 			if jointype == JoinType.Round {
 				X, Y := 1.0, 0.0
 				for i := 0; i < round(step360*2*math.Pi); i++ {
-					result = append(result, Point(round(pts[0].x+X*delta),
-						round(pts[0].y+Y*delta)))
+					result = append(result, &Point{round(pts[0].X + X*delta),
+						round(pts[0].Y + Y*delta)})
 					X2 := X
 					X = X*mcos - msin*Y
 					Y = X2*msin + Y*mcos
@@ -2875,8 +2930,8 @@ doRound:
 			} else {
 				X, Y := -1.0, -1.0
 				for i := 0; i < 4; i++ {
-					result = append(result, Point(round(pts[0].x+X*delta),
-						round(pts[0].y+Y*delta)))
+					result = append(result, &Point{round(pts[0].X + X*delta),
+						round(pts[0].Y + Y*delta)})
 					if X < 0 {
 						X = 1
 					} else if Y < 0 {
@@ -2934,16 +2989,16 @@ doRound:
 			// handle the end (butt, round || square) ...
 			if endtype == EndType.Butt {
 				j = cnt - 1
-				pt1 = Point(round(float(pts[j].x)+Normals[j].x*delta),
-					round(float(pts[j].y)+Normals[j].y*delta))
+				pt1 = &Point{round(float64(pts[j].X) + Normals[j].X*delta),
+					round(float64(pts[j].Y) + Normals[j].Y*delta)}
 				result = append(result, pt1)
-				pt1 = Point(round(float(pts[j].x)-Normals[j].x*delta),
-					round(float(pts[j].y)-Normals[j].y*delta))
+				pt1 = &Point{round(float64(pts[j].X) - Normals[j].X*delta),
+					round(float64(pts[j].Y) - Normals[j].Y*delta)}
 				result = append(result, pt1)
 			} else {
 				j = cnt - 1
 				k = cnt - 2
-				Normals[j] = FloatPoint(-Normals[j].x, -Normals[j].y)
+				Normals[j] = FloatPoint(-Normals[j].X, -Normals[j].Y)
 				if endtype == EndType.Square {
 					doSquare(pts[j])
 				} else {
@@ -2953,9 +3008,9 @@ doRound:
 
 			// re-build Normals ...
 			for j := cnt - 1; j > 0; j-- {
-				Normals[j] = FloatPoint(-Normals[j-1].x, -Normals[j-1].y)
+				Normals[j] = FloatPoint(-Normals[j-1].X, -Normals[j-1].Y)
 			}
-			Normals[0] = FloatPoint(-Normals[1].x, -Normals[1].y)
+			Normals[0] = FloatPoint(-Normals[1].X, -Normals[1].Y)
 
 			// offset the polyline going backward ...
 			k = cnt - 1
@@ -2966,11 +3021,11 @@ doRound:
 
 			// finally handle the start (butt, round || square) ...
 			if endtype == EndType.Butt {
-				pt1 = Point(round(float(pts[0].x)-Normals[0].x*delta),
-					round(float(pts[0].y)-Normals[0].y*delta))
+				pt1 = &Point{round(float64(pts[0].X) - Normals[0].X*delta),
+					round(float64(pts[0].Y) - Normals[0].Y*delta)}
 				result = append(result, pt1)
-				pt1 = Point(round(float(pts[0].x)+Normals[0].x*delta),
-					round(float(pts[0].y)+Normals[0].y*delta))
+				pt1 = &Point{round(float64(pts[0].X) + Normals[0].X*delta),
+					round(float64(pts[0].Y) + Normals[0].Y*delta)}
 				result = append(result, pt1)
 			} else {
 				j = 0
@@ -2985,19 +3040,19 @@ doRound:
 		}
 	}
 	c := NewClipper()
-	c.AddPolygons(res, PolyType.Subject)
+	c.AddPolygons(res, Subject)
 	if delta > 0 {
-		c.Execute(ClipType.Union, res, PolyFillType.Positive, PolyFillType.Positive)
+		c.Execute(Union, res, Positive, Positive)
 	} else {
 		bounds = getBounds(res)
 		outer = make([]*Point, 0)
-		outer = append(outer, Point(bounds.left-10, bounds.bottom+10))
-		outer = append(outer, Point(bounds.right+10, bounds.bottom+10))
-		outer = append(outer, Point(bounds.right+10, bounds.top-10))
-		outer = append(outer, Point(bounds.left-10, bounds.top-10))
-		c.AddPolygon(outer, PolyType.Subject)
+		outer = append(outer, &Point{bounds.left - 10, bounds.bottom + 10})
+		outer = append(outer, &Point{bounds.right + 10, bounds.bottom + 10})
+		outer = append(outer, &Point{bounds.right + 10, bounds.top - 10})
+		outer = append(outer, &Point{bounds.left - 10, bounds.top - 10})
+		c.AddPolygon(outer, Subject)
 		c.ReverseSolution = true
-		c.Execute(ClipType.Union, res, PolyFillType.Negative, PolyFillType.Negative)
+		c.Execute(Union, res, Negative, Negative)
 		if len(res) > 0 {
 			res = res[1:len(res)]
 		}
@@ -3006,7 +3061,7 @@ doRound:
 }
 
 // defaults: jointype = JoinType.Square, limit = 0.0, autoFix = true
-func OffsetPolygons(polys [][]*Point, delta float64, jointype JoinType, limit float64, autoFix bool) [][]*Point {
+func OffsetPolygons(polys []*outRec, delta float64, jointype JoinType, limit float64, autoFix bool) []*outRec {
 	if !autoFix {
 		return offsetInternal(polys, true, delta, jointype, EndType.Butt, limit)
 	}
@@ -3019,8 +3074,8 @@ func OffsetPolygons(polys [][]*Point, delta float64, jointype JoinType, limit fl
 			continue
 		}
 		bot = getLowestPt(poly)
-		if botPt == nil || (bot.y > botPt.y) ||
-			(bot.y == botPt.y && bot.x < botPt.x) {
+		if botPt == nil || (bot.Y > botPt.Y) ||
+			(bot.Y == botPt.Y && bot.X < botPt.X) {
 			botPt = bot
 			botPoly = poly
 		}
@@ -3039,7 +3094,7 @@ func OffsetPolygons(polys [][]*Point, delta float64, jointype JoinType, limit fl
 }
 
 //defaults: jointype = JoinType.Square, endtype = EndType.Square, limit = 0.0
-func OffsetPolyLines(polys [][]*Point, delta float64, jointype JoinType, endtype EndType, limit float64) [][]*Point {
+func OffsetPolyLines(polys []*outRec, delta float64, jointype JoinType, endtype EndType, limit float64) []*outRec {
 	polys2 := polys[:]
 	for _, p := range polys2 {
 		if len(p) == 0 {
@@ -3063,18 +3118,18 @@ func OffsetPolyLines(polys [][]*Point, delta float64, jointype JoinType, endtype
 }
 
 func distanceSqrd(pt1, pt2 *Point) int {
-	dx := (pt1.x - pt2.x)
-	dy := (pt1.y - pt2.y)
+	dx := (pt1.X - pt2.X)
+	dy := (pt1.Y - pt2.Y)
 	return (dx*dx + dy*dy)
 }
 
 func closestPointOnLine(pt, linePt1, linePt2 *Point) *FloatPoint {
-	dx := linePt2.x - linePt1.x
-	dy := linePt2.y - linePt1.y
+	dx := linePt2.X - linePt1.X
+	dy := linePt2.Y - linePt1.Y
 	if dx == 0 && dy == 0 {
-		return FloatPoint(linePt1.x, linePt1.y)
+		return FloatPoint(linePt1.X, linePt1.Y)
 	}
-	q := ((pt.x-linePt1.x)*dx + (pt.Y-linePt1.Y)*dy) / (dx*dx + dy*dy)
+	q := ((pt.X-linePt1.X)*dx + (pt.Y-linePt1.Y)*dy) / (dx*dx + dy*dy)
 	return FloatPoint(
 		(1-q)*linePt1.X+q*linePt2.X,
 		(1-q)*linePt1.Y+q*linePt2.Y)
@@ -3085,14 +3140,14 @@ func slopesNearColinear(pt1, pt2, pt3 *Point, distSqrd int) bool {
 		return false
 	}
 	cpol := closestPointOnLine(pt2, pt1, pt3)
-	dx := pt2.x - cpol.x
-	dy := pt2.y - cpol.y
+	dx := pt2.X - cpol.X
+	dy := pt2.Y - cpol.Y
 	return (dx*dx + dy*dy) < distSqrd
 }
 
 func pointsAreClose(pt1, pt2 *Point, distSqrd int) bool {
-	dx := pt1.x - pt2.x
-	dy := pt1.y - pt2.y
+	dx := pt1.X - pt2.X
+	dy := pt1.Y - pt2.Y
 	return (dx*dx)+(dy*dy) <= distSqrd
 }
 
@@ -3110,12 +3165,12 @@ func CleanPolygon(poly []*Point, distance float64) []*Point {
 	result = make([]*Point, 0)
 	i = 0
 	for {
-		for i < highI && _PointsAreClose(pt, poly[i+1], distSqrd) {
+		for i < highI && pointsAreClose(pt, poly[i+1], distSqrd) {
 			i += 2
 		}
 		i2 = i
-		for i < highI && (_PointsAreClose(poly[i], poly[i+1], distSqrd) ||
-			_SlopesNearColinear(pt, poly[i], poly[i+1], distSqrd)) {
+		for i < highI && (pointsAreClose(poly[i], poly[i+1], distSqrd) ||
+			slopesNearColinear(pt, poly[i], poly[i+1], distSqrd)) {
 			i += 1
 		}
 		if i >= highI {
@@ -3132,7 +3187,7 @@ func CleanPolygon(poly []*Point, distance float64) []*Point {
 		result = append(result, poly[i])
 	}
 	j = len(result)
-	if j > 2 && _SlopesNearColinear(result[j-2], result[j-1], result[0], distSqrd) {
+	if j > 2 && slopesNearColinear(result[j-2], result[j-1], result[0], distSqrd) {
 		result = result[0 : j-1]
 	}
 	if len(result) < 3 {
@@ -3143,28 +3198,54 @@ func CleanPolygon(poly []*Point, distance float64) []*Point {
 }
 
 // defaults: distance float64 = 1.415
-func CleanPolygons(polys [][]*Point, distance float64) [][]*Point {
-	result = make([][]*Point, 0)
+func CleanPolygons(polys []*outRec, distance float64) []*outRec {
+	result = make([]*outRec, 0)
 	for _, poly := range polys {
 		result = append(result, CleanPolygon(poly, distance))
 	}
 	return result
 }
 
-func SimplifyPolygon(poly []*Point, fillType FillType) []*Point {
-	var result []*Point
+func SimplifyPolygon(poly *outRec, fillType PolyFillType) []*Point {
+	var result *outRec
 	c := Clipper()
 	c.ForceSimple = true
-	c.AddPolygon(poly, PolyType.Subject)
-	c.Execute(ClipType.Union, result, fillType, fillType)
+	c.AddPolygon(poly, Subject)
+	c.Execute(Union, result, fillType, fillType)
 	return result
 }
 
-func SimplifyPolygons(polys [][]*Point, fillType FillType) [][]*Point {
-	var result [][]*Point
+func SimplifyPolygons(polys []*outRec, fillType PolyFillType) []*outRec {
+	var result []*outRec
 	c := Clipper()
 	c.ForceSimple = true
-	c.AddPolygons(polys, PolyType.Subject)
-	c.Execute(ClipType.Union, result, fillType, fillType)
+	c.AddPolygons(polys, Subject)
+	c.Execute(Union, result, fillType, fillType)
 	return result
+}
+
+// convert float to int (rounding)
+func round(f float64) int {
+	return int(f + 0.5)
+}
+func intAbs(i int) int {
+	if i > 0 {
+		return i
+	} else {
+		return i * -1
+	}
+}
+func min(a, b int) int {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+func max(a, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
 }
