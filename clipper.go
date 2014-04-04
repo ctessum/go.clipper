@@ -73,16 +73,16 @@ type JoinType int
 const (
 	SquareJoin JoinType = iota
 	RoundJoin
-	Miter
+	MiterJoin
 )
 
 type EndType int
 
 const (
-	Closed EndType = iota
+	ClosedEnd EndType = iota
 	ButtEnd
 	SquareEnd
-	Round
+	RoundEnd
 )
 
 type edgeSide int
@@ -511,7 +511,8 @@ func (self *ClipperBase) AddPolygon(polygon []*Point, polyType PolyType) bool {
 	if ln < 3 {
 		return false
 	}
-	pg := polygon[:]
+	pg := make([]*Point, len(polygon))
+	copy(pg, polygon)
 	j := 0
 	// remove duplicate points && co-linear points
 	for i := 1; i < len(polygon); i++ {
@@ -1392,7 +1393,7 @@ func (self *Clipper) insertLocalMinimaIntoAEL(botY int) {
 		if rb.outIdx >= 0 && rb.dx == horizontal && self.horzJoins != nil {
 			hj := self.horzJoins
 			for {
-				dummy1, dummy2, overlap := getOverlapSegment(hj.edge.Bot, hj.edge.Top, rb.Bot, rb.Top)
+				_, _, overlap := getOverlapSegment(hj.edge.Bot, hj.edge.Top, rb.Bot, rb.Top)
 				if overlap {
 					self.addJoin(hj.edge, rb, hj.savedIdx, -1)
 				}
@@ -2794,48 +2795,51 @@ func stripDupPts(poly []*Point) []*Point {
 	return poly
 }
 
-func offsetInternal(polys []*outRec, isPolygon bool, delta int,
-	jointype JoinType, endtype EndType, limit float64) []*Point {
+func offsetInternal(polys [][]*Point, isPolygon bool, delta float64,
+	jointype JoinType, endtype EndType, limit float64) [][]*Point {
 
-	var sinA, mcos, msin, step360 float64
-	var Normals []*Point
+	var sinA, mcos, msin, step360, miterLim float64
+	var pts []*Point
+	var Normals []*FloatPoint
 	var k, j int
-	var result []*Point
+	var result polySorter
 	doSquare := func(pt *Point) {
 		// see offset_triginometry.svg in the documentation folder ...
 		dx := math.Tan(math.Atan2(sinA,
-			Normals[k].X*Normals[j].X+Normals[k].Y*Normals[j].Y) / 4)
+			(Normals[k].X*Normals[j].X+Normals[k].Y*Normals[j].Y)) / 4)
 		result = append(result, &Point{
-			round(pt.X + delta*(Normals[k].X-Normals[k].Y*dx)),
-			round(pt.Y + delta*(Normals[k].Y+Normals[k].X*dx))})
+			round(float64(pt.X) + delta*(Normals[k].X-
+				Normals[k].Y*dx)),
+			round(float64(pt.Y) + delta*(Normals[k].Y+Normals[k].X*dx))})
 		result = append(result, &Point{
-			round(pt.X + delta*(Normals[j].X+Normals[j].Y*dx)),
-			round(pt.Y + delta*(Normals[j].Y-Normals[j].X*dx))})
+			round(float64(pt.X) + delta*(Normals[j].X+Normals[j].Y*dx)),
+			round(float64(pt.Y) + delta*(Normals[j].Y-Normals[j].X*dx))})
 		return
 	}
 
 	doMiter := func(pt *Point, r float64) {
 		q := delta / r
 		result = append(result, &Point{
-			round(pt.X + (Normals[k].X+Normals[j].X)*q),
-			round(pt.Y + (Normals[k].Y+Normals[j].Y)*q)})
+			round(float64(pt.X) + (Normals[k].X+Normals[j].X)*q),
+			round(float64(pt.Y) + (Normals[k].Y+Normals[j].Y)*q)})
 		return
 	}
 
 	doRound := func(pt *Point) {
 		a := math.Atan2(sinA,
-			Normals[k].X*Normals[j].X+Normals[k].Y*Normals[j].Y)
+			(Normals[k].X*Normals[j].X + Normals[k].Y*Normals[j].Y))
 		steps := round(step360 * math.Abs(a))
 		X, Y := Normals[k].X, Normals[k].Y
 		for i := 0; i < steps; i++ {
 			result = append(result, &Point{
-				round(pt.X + X*delta), round(pt.Y + Y*delta)})
+				round(float64(pt.X) + X*delta),
+				round(float64(pt.Y) + Y*delta)})
 			X2 := X
 			X = X*mcos - msin*Y
 			Y = X2*msin + Y*mcos
 		}
-		result = append(result, &Point{round(pt.X + Normals[j].X*delta),
-			round(pt.Y + Normals[j].Y*delta)})
+		result = append(result, &Point{round(float64(pt.X) +
+			Normals[j].X*delta), round(float64(pt.Y) + Normals[j].Y*delta)})
 		return
 	}
 
@@ -2851,19 +2855,21 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 
 	offsetPoint := func(jointype JoinType) (j int) {
 		if sinA*delta < 0 {
-			result = append(result, &Point{round(pts[j].X + Normals[k].X*delta),
-				round(pts[j].Y + Normals[k].Y*delta)})
+			result = append(result, &Point{round(float64(pts[j].X) +
+				Normals[k].X*delta),
+				round(float64(pts[j].Y) + Normals[k].Y*delta)})
 			result = append(result, pts[j])
-			result = append(result, &Point{round(pts[j].X + Normals[j].X*delta),
-				round(pts[j].Y + Normals[j].Y*delta)})
-		} else if jointype == JoinType.Miter {
+			result = append(result, &Point{round(float64(pts[j].X) +
+				Normals[j].X*delta),
+				round(float64(pts[j].Y) + Normals[j].Y*delta)})
+		} else if jointype == MiterJoin {
 			r := 1.0 + (Normals[j].X*Normals[k].X + Normals[j].Y*Normals[k].Y)
 			if r >= miterLim {
 				doMiter(pts[j], r)
 			} else {
 				doSquare(pts[j])
 			}
-		} else if jointype == JoinType.Square {
+		} else if jointype == SquareJoin {
 			doSquare(pts[j])
 		} else {
 			doRound(pts[j])
@@ -2878,38 +2884,39 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 		delta = -delta
 	}
 
-	if jointype == JoinType.Miter {
+	if jointype == MiterJoin {
 		// miterLim: see offset_triginometry3.svg in the documentation folder ...
 		if limit > 2 {
 			miterLim = 2 / (limit * limit)
 		} else {
 			miterLim = 0.5
 		}
-		if endtype == EndType.Round {
+		if endtype == RoundEnd {
 			limit = 0.25
 		}
 	}
 
-	if jointype == JoinType.Round || endtype == EndType.Round {
+	if jointype == RoundJoin || endtype == RoundEnd {
 		if limit <= 0 {
 			limit = 0.25
 		} else if limit > math.Abs(delta)*0.25 {
 			limit = math.Abs(delta) * 0.25
 		}
 		// step360: see offset_triginometry2.svg in the documentation folder ...
-		step360 := math.Pi / math.Acos(1-limit/abs(delta))
+		step360 := math.Pi / math.Acos(1-limit/math.Abs(delta))
 		msin := math.Sin(2 * math.Pi / step360)
-		mcos := math.Cos(2 * math.Pi / step360)
+		//mcos := math.Cos(2 * math.Pi / step360)
 		step360 /= math.Pi * 2
 		if delta < 0 {
 			msin = -msin
 		}
 	}
 
-	res := make([]*Point, 0)
-	ppts := polys[:]
+	res := make([][]*Point, 0)
+	ppts := make([][]*Point, len(polys))
+	copy(ppts, polys)
 	for _, pts := range ppts {
-		Normals = make([]*Point, 0)
+		Normals = make([]*FloatPoint, 0)
 		result = make([]*Point, 0)
 		cnt := len(pts)
 
@@ -2918,11 +2925,11 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 		}
 
 		if cnt == 1 {
-			if jointype == JoinType.Round {
+			if jointype == RoundJoin {
 				X, Y := 1.0, 0.0
 				for i := 0; i < round(step360*2*math.Pi); i++ {
-					result = append(result, &Point{round(pts[0].X + X*delta),
-						round(pts[0].Y + Y*delta)})
+					result = append(result, &Point{round(float64(pts[0].X) +
+						X*delta), round(float64(pts[0].Y) + Y*delta)})
 					X2 := X
 					X = X*mcos - msin*Y
 					Y = X2*msin + Y*mcos
@@ -2930,8 +2937,9 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 			} else {
 				X, Y := -1.0, -1.0
 				for i := 0; i < 4; i++ {
-					result = append(result, &Point{round(pts[0].X + X*delta),
-						round(pts[0].Y + Y*delta)})
+					result = append(result, &Point{round(
+						float64(pts[0].X) + X*delta),
+						round(float64(pts[0].Y) + Y*delta)})
 					if X < 0 {
 						X = 1
 					} else if Y < 0 {
@@ -2959,7 +2967,7 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 		}
 
 		if isPolygon || forceClose {
-			k := cnt - 1
+			k = cnt - 1
 			for j := 0; j < cnt; j++ {
 				sinA = GetSin()
 				k = offsetPoint(jointype)
@@ -2975,11 +2983,13 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 					k = offsetPoint(jointype)
 				}
 				delta = -delta
-				res = append(res, sort.Reverse(result).([]*Point))
+				sort.Reverse(result)
+				res = append(res, []*Point(result))
 			}
 
 		} else {
 			// offset the polyline going forward ...
+			var pt1 *Point
 			k = 0
 			for j := 1; j < cnt-1; j++ {
 				sinA = GetSin()
@@ -2987,7 +2997,7 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 			}
 
 			// handle the end (butt, round || square) ...
-			if endtype == EndType.Butt {
+			if endtype == ButtEnd {
 				j = cnt - 1
 				pt1 = &Point{round(float64(pts[j].X) + Normals[j].X*delta),
 					round(float64(pts[j].Y) + Normals[j].Y*delta)}
@@ -2998,8 +3008,8 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 			} else {
 				j = cnt - 1
 				k = cnt - 2
-				Normals[j] = FloatPoint(-Normals[j].X, -Normals[j].Y)
-				if endtype == EndType.Square {
+				Normals[j] = &FloatPoint{-Normals[j].X, -Normals[j].Y}
+				if endtype == SquareEnd {
 					doSquare(pts[j])
 				} else {
 					doRound(pts[j])
@@ -3008,9 +3018,9 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 
 			// re-build Normals ...
 			for j := cnt - 1; j > 0; j-- {
-				Normals[j] = FloatPoint(-Normals[j-1].X, -Normals[j-1].Y)
+				Normals[j] = &FloatPoint{-Normals[j-1].X, -Normals[j-1].Y}
 			}
-			Normals[0] = FloatPoint(-Normals[1].X, -Normals[1].Y)
+			Normals[0] = &FloatPoint{-Normals[1].X, -Normals[1].Y}
 
 			// offset the polyline going backward ...
 			k = cnt - 1
@@ -3020,7 +3030,7 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 			}
 
 			// finally handle the start (butt, round || square) ...
-			if endtype == EndType.Butt {
+			if endtype == ButtEnd {
 				pt1 = &Point{round(float64(pts[0].X) - Normals[0].X*delta),
 					round(float64(pts[0].Y) - Normals[0].Y*delta)}
 				result = append(result, pt1)
@@ -3030,13 +3040,13 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 			} else {
 				j = 0
 				k = 1
-				if endtype == EndType.Square {
+				if endtype == SquareEnd {
 					doSquare(pts[0])
 				} else {
 					doRound(pts[0])
 				}
 			}
-			res.append(result)
+			res = append(res, result)
 		}
 	}
 	c := NewClipper()
@@ -3044,8 +3054,8 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 	if delta > 0 {
 		c.Execute(Union, res, Positive, Positive)
 	} else {
-		bounds = getBounds(res)
-		outer = make([]*Point, 0)
+		bounds := getBounds(res)
+		outer := make([]*Point, 0)
 		outer = append(outer, &Point{bounds.left - 10, bounds.bottom + 10})
 		outer = append(outer, &Point{bounds.right + 10, bounds.bottom + 10})
 		outer = append(outer, &Point{bounds.right + 10, bounds.top - 10})
@@ -3060,12 +3070,14 @@ func offsetInternal(polys []*outRec, isPolygon bool, delta int,
 	return res
 }
 
-// defaults: jointype = JoinType.Square, limit = 0.0, autoFix = true
-func OffsetPolygons(polys []*outRec, delta float64, jointype JoinType, limit float64, autoFix bool) []*outRec {
+// defaults: jointype = SquareJoin, limit = 0.0, autoFix = true
+func OffsetPolygons(polys [][]*Point, delta float64, jointype JoinType,
+	limit float64, autoFix bool) [][]*Point {
 	if !autoFix {
-		return offsetInternal(polys, true, delta, jointype, EndType.Butt, limit)
+		return offsetInternal(polys, true, delta, jointype, ButtEnd, limit)
 	}
-	pts := polys[:]
+	pts := make([][]*Point, len(polys))
+	copy(pts, polys)
 	botPoly := make([]*Point, 0)
 	var botPt *Point
 	for _, poly := range pts {
@@ -3073,7 +3085,7 @@ func OffsetPolygons(polys []*outRec, delta float64, jointype JoinType, limit flo
 		if len(poly) < 3 {
 			continue
 		}
-		bot = getLowestPt(poly)
+		bot := getLowestPt(poly)
 		if botPt == nil || (bot.Y > botPt.Y) ||
 			(bot.Y == botPt.Y && bot.X < botPt.X) {
 			botPt = bot
@@ -3087,15 +3099,19 @@ func OffsetPolygons(polys []*outRec, delta float64, jointype JoinType, limit flo
 	// reverse the orientation of all the polygons ...
 	if Area(botPoly) < 0.0 {
 		for i := 0; i < len(pts); i++ {
-			pts[i] = sort.Reverse(pts[i]).([]*Point)
+			ps := polySorter(pts[i])
+			sort.Reverse(ps)
+			pts[i] = []*Point(ps)
 		}
 	}
-	return offsetInternal(pts, true, delta, jointype, EndType.Butt, limit)
+	return offsetInternal(pts, true, delta, jointype, ButtEnd, limit)
 }
 
-//defaults: jointype = JoinType.Square, endtype = EndType.Square, limit = 0.0
-func OffsetPolyLines(polys []*outRec, delta float64, jointype JoinType, endtype EndType, limit float64) []*outRec {
-	polys2 := polys[:]
+//defaults: jointype = SquareJoin, endtype = SquareEnd, limit = 0.0
+func OffsetPolyLines(polys [][]*Point, delta float64, jointype JoinType,
+	endtype EndType, limit float64) [][]*Point {
+	polys2 := make([][]*Point, len(polys))
+	copy(polys2, polys)
 	for _, p := range polys2 {
 		if len(p) == 0 {
 			continue
@@ -3107,11 +3123,13 @@ func OffsetPolyLines(polys []*outRec, delta float64, jointype JoinType, endtype 
 		}
 	}
 
-	if endtype == EndType.Closed {
+	if endtype == ClosedEnd {
 		for i := 0; i < len(polys2); i++ {
-			polys2 = append(polys2, sort.Reverse(polys2[i]).([]*Point))
+			ps := polySorter(polys2[i])
+			sort.Reverse(ps)
+			polys2 = append(polys2, []*Point(ps))
 		}
-		return offsetInternal(polys2, true, delta, jointype, EndType.Butt, limit)
+		return offsetInternal(polys2, true, delta, jointype, ButtEnd, limit)
 	} else {
 		return offsetInternal(polys2, false, delta, jointype, endtype, limit)
 	}
@@ -3123,16 +3141,16 @@ func distanceSqrd(pt1, pt2 *Point) int {
 	return (dx*dx + dy*dy)
 }
 
-func closestPointOnLine(pt, linePt1, linePt2 *Point) *FloatPoint {
+func closestPointOnLine(pt, linePt1, linePt2 *Point) *Point {
 	dx := linePt2.X - linePt1.X
 	dy := linePt2.Y - linePt1.Y
 	if dx == 0 && dy == 0 {
-		return FloatPoint(linePt1.X, linePt1.Y)
+		return &Point{linePt1.X, linePt1.Y}
 	}
 	q := ((pt.X-linePt1.X)*dx + (pt.Y-linePt1.Y)*dy) / (dx*dx + dy*dy)
-	return FloatPoint(
-		(1-q)*linePt1.X+q*linePt2.X,
-		(1-q)*linePt1.Y+q*linePt2.Y)
+	return &Point{
+		(1-q)*linePt1.X + q*linePt2.X,
+		(1-q)*linePt1.Y + q*linePt2.Y}
 }
 
 func slopesNearColinear(pt1, pt2, pt3 *Point, distSqrd int) bool {
@@ -3152,7 +3170,7 @@ func pointsAreClose(pt1, pt2 *Point, distSqrd int) bool {
 }
 
 //defaults: distance float64 = 1.415
-func CleanPolygon(poly []*Point, distance float64) []*Point {
+func CleanPolygon(poly []*Point, distance int) []*Point {
 	distSqrd := distance * distance
 	highI := len(poly) - 1
 	for highI > 0 && pointsEqual(poly[highI], poly[0]) {
@@ -3162,13 +3180,13 @@ func CleanPolygon(poly []*Point, distance float64) []*Point {
 		return nil
 	}
 	pt := poly[highI]
-	result = make([]*Point, 0)
-	i = 0
+	result := make([]*Point, 0)
+	i := 0
 	for {
 		for i < highI && pointsAreClose(pt, poly[i+1], distSqrd) {
 			i += 2
 		}
-		i2 = i
+		i2 := i
 		for i < highI && (pointsAreClose(poly[i], poly[i+1], distSqrd) ||
 			slopesNearColinear(pt, poly[i], poly[i+1], distSqrd)) {
 			i += 1
@@ -3186,7 +3204,7 @@ func CleanPolygon(poly []*Point, distance float64) []*Point {
 	if i <= highI {
 		result = append(result, poly[i])
 	}
-	j = len(result)
+	j := len(result)
 	if j > 2 && slopesNearColinear(result[j-2], result[j-1], result[0], distSqrd) {
 		result = result[0 : j-1]
 	}
@@ -3198,31 +3216,37 @@ func CleanPolygon(poly []*Point, distance float64) []*Point {
 }
 
 // defaults: distance float64 = 1.415
-func CleanPolygons(polys []*outRec, distance float64) []*outRec {
-	result = make([]*outRec, 0)
+func CleanPolygons(polys [][]*Point, distance int) [][]*Point {
+	result := make([][]*Point, 0)
 	for _, poly := range polys {
 		result = append(result, CleanPolygon(poly, distance))
 	}
 	return result
 }
 
-func SimplifyPolygon(poly *outRec, fillType PolyFillType) []*Point {
-	var result *outRec
-	c := Clipper()
+func SimplifyPolygon(poly []*Point, fillType PolyFillType) [][]*Point {
+	var result [][]*Point
+	c := NewClipper()
 	c.ForceSimple = true
 	c.AddPolygon(poly, Subject)
 	c.Execute(Union, result, fillType, fillType)
 	return result
 }
 
-func SimplifyPolygons(polys []*outRec, fillType PolyFillType) []*outRec {
-	var result []*outRec
-	c := Clipper()
+func SimplifyPolygons(polys [][]*Point, fillType PolyFillType) [][]*Point {
+	var result [][]*Point
+	c := NewClipper()
 	c.ForceSimple = true
 	c.AddPolygons(polys, Subject)
 	c.Execute(Union, result, fillType, fillType)
 	return result
 }
+
+type polySorter []*Point
+
+func (p polySorter) Len() int           { return len(p) }
+func (p polySorter) Less(i, j int) bool { return false }
+func (p polySorter) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
 // convert float to int (rounding)
 func round(f float64) int {
