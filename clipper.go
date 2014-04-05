@@ -122,6 +122,9 @@ func newLocalMinima(y int, leftBound, rightBound *edge) *localMinima {
 	out := new(localMinima)
 	out.Y = y
 	out.leftBound, out.rightBound = leftBound, rightBound
+	if e2InsertsBeforeE1(leftBound, rightBound) {
+		fmt.Println("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+	}
 	return out
 }
 
@@ -205,13 +208,23 @@ func IntsToPoints(ints []int) []*Point {
 }
 
 // see http://www.mathopenref.com/coordpolygonarea2.html
-func Area(polygon []*Point) int {
+func Area(polygon []*Point) float64 {
 	highI := len(polygon) - 1
-	A := (polygon[highI].X + polygon[0].X) * (polygon[0].Y - polygon[highI].Y)
+	A := float64((polygon[highI].X +
+		polygon[0].X) * (polygon[0].Y - polygon[highI].Y))
 	for i := 0; i < highI; i++ {
-		A += (polygon[i].X + polygon[i+1].X) * (polygon[i+1].Y - polygon[i].Y)
+		A += float64((polygon[i].X +
+			polygon[i+1].X) * (polygon[i+1].Y - polygon[i].Y))
 	}
-	return A / 2
+	return A / 2.
+}
+
+func AreaCombined(polygons [][]*Point) float64 {
+	a := 0.
+	for _, polygon := range polygons {
+		a += Area(polygon)
+	}
+	return a
 }
 
 func orientation(polygon []*Point) bool {
@@ -344,8 +357,9 @@ func NewEdge() *edge {
 }
 
 func (self *edge) String() string {
-	return fmt.Sprintf("(%d,%d . %d,%d {dx:%0.2f} %i)",
-		self.Bot.X, self.Bot.Y, self.Top.X, self.Top.Y, self.dx, self.outIdx)
+	return fmt.Sprintf("(bot: %d,%d . top: %d,%d . curr: %d,%d {dx:%0.2f} %d)",
+		self.Bot.X, self.Bot.Y, self.Top.X, self.Top.Y,
+		self.Curr.X, self.Curr.Y, self.dx, self.outIdx)
 }
 
 //===============================================================================
@@ -461,7 +475,8 @@ func (self *ClipperBase) addBoundsToLML(e *edge) *edge {
 			swapX(e)
 		}
 		lm = newLocalMinima(e.prevE.Bot.Y, e.prevE, e)
-	} else if e.dx < e.prevE.dx {
+		//} else if e.dx < e.prevE.dx {
+	} else if e2InsertsBeforeE1(e, e.prevE) {
 		lm = newLocalMinima(e.prevE.Bot.Y, e.prevE, e)
 	} else {
 		lm = newLocalMinima(e.prevE.Bot.Y, e, e.prevE)
@@ -1119,19 +1134,18 @@ type Clipper struct {
 	ClipperBase
 	ReverseSolution bool
 	ForceSimple     bool
-
-	polyOutList    []*outRec
-	clipType       ClipType
-	scanbeam       *scanbeam
-	activeEdges    *edge
-	sortedEdges    *edge
-	intersectNodes *intersectNode
-	clipFillType   PolyFillType
-	subjFillType   PolyFillType
-	executeLocked  bool
-	usingPolyTree  bool
-	joinList       []*joinRec
-	horzJoins      *horzJoin
+	polyOutList     []*outRec
+	clipType        ClipType
+	scanbeam        *scanbeam
+	activeEdges     *edge
+	sortedEdges     *edge
+	intersectNodes  *intersectNode
+	clipFillType    PolyFillType
+	subjFillType    PolyFillType
+	executeLocked   bool
+	usingPolyTree   bool
+	joinList        []*joinRec
+	horzJoins       *horzJoin
 }
 
 func NewClipper() *Clipper {
@@ -1159,6 +1173,14 @@ func (self *Clipper) reset() {
 func (self *Clipper) Clear() {
 	self.polyOutList = make([]*outRec, 0)
 	self.clearBase()
+}
+
+func (self *Clipper) printActiveEdges() {
+	e := self.activeEdges
+	for e != nil {
+		fmt.Println(e)
+		e = e.nextInAEL
+	}
 }
 
 func (self *Clipper) insertScanbeam(y int) {
@@ -2597,24 +2619,22 @@ func (self *Clipper) executeInternal() bool {
 			reversePolyPtLinks(outRec.pts)
 		}
 	}
-
 	if self.joinList != nil {
 		self.joinCommonEdges()
 	}
 	if self.ForceSimple {
 		self.doSimplePolygons()
 	}
-
 	return true
 }
 
 func (self *Clipper) Execute(
 	clipType ClipType,
-	solution [][]*Point,
 	subjFillType,
-	clipFillType PolyFillType) bool {
+	clipFillType PolyFillType) ([][]*Point, bool) {
+	var solution [][]*Point
 	if self.executeLocked {
-		return false
+		return solution, false
 	}
 	defer func() {
 		self.executeLocked = false
@@ -2623,16 +2643,14 @@ func (self *Clipper) Execute(
 
 	self.executeLocked = true
 	self.usingPolyTree = true
-	solution = nil
 	self.subjFillType = subjFillType
 	self.clipFillType = clipFillType
 	self.clipType = clipType
 	result := self.executeInternal()
 	if result {
-		self.buildResult(solution)
+		solution = self.buildResult()
 	}
-
-	return result
+	return solution, result
 }
 
 func (self *Clipper) Execute2(
@@ -2657,11 +2675,11 @@ func (self *Clipper) Execute2(
 	if result {
 		self.buildResult2(solutionTree)
 	}
-
 	return result
 }
 
-func (self *Clipper) buildResult(polygons [][]*Point) {
+func (self *Clipper) buildResult() [][]*Point {
+	polygons := make([][]*Point, 0)
 	for _, outRec := range self.polyOutList {
 		if outRec == nil {
 			continue
@@ -2678,7 +2696,7 @@ func (self *Clipper) buildResult(polygons [][]*Point) {
 		}
 		polygons = append(polygons, poly)
 	}
-	return
+	return polygons
 }
 
 func (self *Clipper) buildResult2(polyTree *PolyTree) {
@@ -3052,7 +3070,7 @@ func offsetInternal(polys [][]*Point, isPolygon bool, delta float64,
 	c := NewClipper()
 	c.AddPolygons(res, Subject)
 	if delta > 0 {
-		c.Execute(Union, res, Positive, Positive)
+		res, _ = c.Execute(Union, Positive, Positive)
 	} else {
 		bounds := getBounds(res)
 		outer := make([]*Point, 0)
@@ -3062,7 +3080,7 @@ func offsetInternal(polys [][]*Point, isPolygon bool, delta float64,
 		outer = append(outer, &Point{bounds.left - 10, bounds.top - 10})
 		c.AddPolygon(outer, Subject)
 		c.ReverseSolution = true
-		c.Execute(Union, res, Negative, Negative)
+		res, _ = c.Execute(Union, Negative, Negative)
 		if len(res) > 0 {
 			res = res[1:len(res)]
 		}
@@ -3229,7 +3247,7 @@ func SimplifyPolygon(poly []*Point, fillType PolyFillType) [][]*Point {
 	c := NewClipper()
 	c.ForceSimple = true
 	c.AddPolygon(poly, Subject)
-	c.Execute(Union, result, fillType, fillType)
+	result, _ = c.Execute(Union, fillType, fillType)
 	return result
 }
 
@@ -3238,7 +3256,7 @@ func SimplifyPolygons(polys [][]*Point, fillType PolyFillType) [][]*Point {
 	c := NewClipper()
 	c.ForceSimple = true
 	c.AddPolygons(polys, Subject)
-	c.Execute(Union, result, fillType, fillType)
+	result, _ = c.Execute(Union, fillType, fillType)
 	return result
 }
 
