@@ -1,757 +1,2087 @@
-//===============================================================================
-//                                                                              //
-// Author    :  Angus Johnson                                                   //
-// Version   :  5.1.6(b)                                                        //
-// Date      :  1 June 2013                                                     //
-// Website   :  http://www.angusj.com                                           //
-// Copyright :  Angus Johnson 2010-2013                                         //
-//                                                                              //
-// License:                                                                     //
-// Use, modification & distribution is subject to Boost Software License Ver 1. //
-// http://www.boost.org/LICENSE_1_0.txt                                         //
-//                                                                              //
-// Attributions:                                                                //
-// The code in this library is an extension of Bala Vatti's clipping algorithm: //
-// "A generic solution to polygon clipping"                                     //
-// Communications of the ACM, Vol 35, Issue 7 (July 1992) PP 56-63.             //
-// http://portal.acm.org/citation.cfm?id=129906                                 //
-//                                                                              //
-// Computer graphics && geometric modeling: implementation && algorithms      //
-// By Max K. Agoston                                                            //
-// Springer; 1 edition (January 4, 2005)                                        //
-// http://books.google.com/books?q=vatti+clipping+agoston                       //
-//                                                                              //
-// See also:                                                                    //
-// "Polygon Offsetting by Computing Winding Numbers"                            //
-// Paper no. DETC2005-85513 PP. 565-575                                         //
-// ASME 2005 International Design Engineering Technical Conferences             //
-// && Computers && Information in Engineering Conference (IDETC/CIE2005)      //
-// September 24-28, 2005 , Long Beach, California, USA                          //
-// http://www.me.berkeley.edu/~mcmains/pubs/DAC05OffsetPolygon.pdf              //
-//                                                                              //
-//===============================================================================
+/*******************************************************************************
+*                                                                              *
+* Author    :  Angus Johnson                                                   *
+* Version   :  6.1.5                                                           *
+* Date      :  28 March 2014                                                   *
+* Website   :  http://www.angusj.com                                           *
+* Copyright :  Angus Johnson 2010-2014                                         *
+*                                                                              *
+* License:                                                                     *
+* Use, modification & distribution is subject to Boost Software License Ver 1. *
+* http://www.boost.org/LICENSE_1_0.txt                                         *
+*                                                                              *
+* Attributions:                                                                *
+* The code in this library is an extension of Bala Vatti's clipping algorithm: *
+* "A generic solution to polygon clipping"                                     *
+* Communications of the ACM, Vol 35, Issue 7 (July 1992) pp 56-63.             *
+* http://portal.acm.org/citation.cfm?id=129906                                 *
+*                                                                              *
+* Computer graphics and geometric modeling: implementation and algorithms      *
+* By Max K. Agoston                                                            *
+* Springer; 1 edition (January 4, 2005)                                        *
+* http://books.google.com/books?q=vatti+clipping+agoston                       *
+*                                                                              *
+* See also:                                                                    *
+* "Polygon Offsetting by Computing Winding Numbers"                            *
+* Paper no. DETC2005-85513 pp. 565-575                                         *
+* ASME 2005 International Design Engineering Technical Conferences             *
+* and Computers and Information in Engineering Conference (IDETC/CIE2005)      *
+* September 24-28, 2005 , Long Beach, California, USA                          *
+* http://www.me.berkeley.edu/~mcmains/pubs/DAC05OffsetPolygon.pdf              *
+*                                                                              *
+*******************************************************************************/
+
+/*******************************************************************************
+*                                                                              *
+* This is a translation of the Delphi Clipper library and the naming style     *
+* used has retained a Delphi flavour.                                          *
+*                                                                              *
+*******************************************************************************/
+
+//use_int32: When enabled 32bit ints are used instead of 64bit ints. This
+//improve performance but coordinate values are limited to the range +/- 46340
 
 package clipper
 
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 )
 
-var (
-	horizontal = math.Inf(-1)
-)
+type Path []*IntPoint
+type Paths []Path
+
+func NewPath() Path {
+	return Path(make([]*IntPoint, 0))
+}
+func NewPaths() Paths {
+	return Paths(make([]Path, 0))
+}
+
+func (p Path) String() string {
+	s := "{"
+	for _, pp := range p {
+		s += fmt.Sprint(pp) + " "
+	}
+	s += "}"
+	return s
+}
+
+func (p Paths) String() string {
+	s := "{"
+	for i, pp := range p {
+		s += pp.String()
+		if i != len(p)-1 {
+			s += "\n"
+		}
+	}
+	s += "}"
+	return s
+}
+
+type DoublePoint struct {
+	X float64
+	Y float64
+}
+
+func NewDoublePoint(x, y float64) *DoublePoint {
+	dp := new(DoublePoint)
+	dp.X = x
+	dp.Y = y
+	return dp
+}
+
+func CopyDoublePoint(dp *DoublePoint) *DoublePoint {
+	dp2 := new(DoublePoint)
+	dp2.X, dp2.Y = dp.X, dp.Y
+	return dp2
+}
+
+func (ip *IntPoint) ToDoublePoint() *DoublePoint {
+	dp := new(DoublePoint)
+	dp.X = float64(ip.X)
+	dp.Y = float64(ip.Y)
+	return dp
+}
+
+//------------------------------------------------------------------------------
+// PolyTree & PolyNode classes
+//------------------------------------------------------------------------------
+
+type PolyTree struct {
+	PolyNode
+	m_AllPolys []*PolyNode
+}
+
+func NewPolyTree() *PolyTree {
+	pt := new(PolyTree)
+	pt.m_AllPolys = make([]*PolyNode, 0)
+	return pt
+}
+
+func (tree *PolyTree) toPolyNode() *PolyNode {
+	node := new(PolyNode)
+	node.m_Parent = tree.m_Parent
+	node.m_polygon = tree.m_polygon
+	node.m_Index = tree.m_Index
+	node.m_jointype = tree.m_jointype
+	node.m_endtype = tree.m_endtype
+	node.m_Childs = tree.m_Childs
+	node.IsOpen = tree.IsOpen
+	return node
+}
+
+func (pt *PolyTree) Clear() {
+	pt.m_AllPolys = make([]*PolyNode, 0)
+	pt.m_Childs = make([]*PolyNode, 0)
+}
+
+func (pt *PolyTree) GetFirst() *PolyNode {
+	if len(pt.m_Childs) > 0 {
+		return pt.m_Childs[0]
+	} else {
+		return nil
+	}
+}
+
+func (pt *PolyTree) Total() int {
+	return len(pt.m_AllPolys)
+}
+
+type PolyNode struct {
+	m_Parent   *PolyNode
+	m_polygon  Path
+	m_Index    int
+	m_jointype JoinType
+	m_endtype  EndType
+	m_Childs   []*PolyNode
+	IsOpen     bool
+}
+
+func NewPolyNode() *PolyNode {
+	pn := new(PolyNode)
+	pn.m_polygon = NewPath()
+	pn.m_Childs = make([]*PolyNode, 0)
+	return pn
+}
+
+func (pn *PolyNode) IsHoleNode() bool {
+	result := true
+	node := pn.m_Parent
+	for node != nil {
+		result = !result
+		node = node.m_Parent
+	}
+	return result
+}
+
+func (pn *PolyNode) ChildCount() int {
+	return len(pn.m_Childs)
+}
+
+func (pn *PolyNode) Contour() Path {
+	return pn.m_polygon
+}
+
+func (pn *PolyNode) AddChild(Child *PolyNode) {
+	cnt := pn.ChildCount()
+	pn.m_Childs = append(pn.m_Childs, Child)
+	Child.m_Parent = pn
+	Child.m_Index = cnt
+}
+
+func (pn *PolyNode) GetNext() *PolyNode {
+	if len(pn.m_Childs) > 0 {
+		return pn.m_Childs[0]
+	} else {
+		return pn.GetNextSiblingUp()
+	}
+}
+
+func (pn *PolyNode) GetNextSiblingUp() *PolyNode {
+	if pn.m_Parent == nil {
+		return nil
+	} else if pn.m_Index == len(pn.m_Parent.m_Childs)-1 {
+		return pn.m_Parent.GetNextSiblingUp()
+	} else {
+		return pn.m_Parent.m_Childs[pn.m_Index+1]
+	}
+}
+
+//func (pn *PolyNode) Childs() []*PolyNode {
+//	return pn.m_Childs
+//}
+
+func (pn *PolyNode) Parent() *PolyNode {
+	return pn.m_Parent
+}
+
+func (pn *PolyNode) IsHole() bool {
+	return pn.IsHoleNode()
+}
+
+//------------------------------------------------------------------------------
+
+func Int128Mul(lhs, rhs cInt) *big.Int {
+	a := big.NewInt(int64(lhs))
+	b := big.NewInt(int64(rhs))
+	c := new(big.Int)
+	return c.Mul(a, b)
+}
+
+//------------------------------------------------------------------------------
+
+// The == operator, which
+// will also compare Z values if they exist, is usually used instead of this one.
+// This may be a problem when using Z values.
+func (a *IntPoint) Equals(b *IntPoint) bool {
+	return a.X == b.X && a.Y == b.Y
+}
+
+func (a *IntPoint) NotEqual(b *IntPoint) bool {
+	return a.X != b.X || a.Y != b.Y
+}
+
+type IntRect struct {
+	left, top, right, bottom cInt
+}
+
+func NewIntRect(l, t, r, b cInt) *IntRect {
+	this := new(IntRect)
+	this.left = l
+	this.top = t
+	this.right = r
+	this.bottom = b
+	return this
+}
+func (ir *IntRect) Copy() *IntRect {
+	this := new(IntRect)
+	this.left = ir.left
+	this.top = ir.top
+	this.right = ir.right
+	this.bottom = ir.bottom
+	return this
+}
 
 type ClipType int
 
 const (
-	Intersection ClipType = iota
-	Union
-	Difference
-	Xor
+	ctIntersection ClipType = iota
+	ctUnion
+	ctDifference
+	ctXor
 )
 
 type PolyType int
 
 const (
-	Subject PolyType = iota
-	Clip
+	ptSubject PolyType = iota
+	ptClip
 )
 
+//By far the most widely used winding rules for polygon filling are
+//EvenOdd & NonZero (GDI, GDI+, XLib, OpenGL, Cairo, AGG, Quartz, SVG, Gr32)
+//Others rules include Positive, Negative and ABS_GTR_EQ_TWO (only in OpenGL)
+//see http://glprogramming.com/red/chapter11.html
 type PolyFillType int
 
 const (
-	EvenOdd PolyFillType = iota
-	NonZero
-	Positive
-	Negative
+	pftEvenOdd PolyFillType = iota
+	pftNonZero
+	pftPositive
+	pftNegative
 )
 
 type JoinType int
 
 const (
-	SquareJoin JoinType = iota
-	RoundJoin
-	MiterJoin
+	jtSquare JoinType = iota
+	jtRound
+	jtMiter
 )
 
 type EndType int
 
 const (
-	ClosedEnd EndType = iota
-	ButtEnd
-	SquareEnd
-	RoundEnd
+	etClosedPolygon EndType = iota
+	etClosedLine
+	etOpenButt
+	etOpenSquare
+	etOpenRound
 )
 
-type edgeSide int
+type EdgeSide int
 
 const (
-	leftEdge edgeSide = iota
-	rightEdge
+	esLeft EdgeSide = iota
+	esRight
 )
 
-type protects int
+type Direction int
 
 const (
-	protectsNeither protects = iota
-	protectsLeft
-	protectsRight
-	protectsBoth
+	dRightToLeft Direction = iota
+	dLeftToRight
 )
 
-type direction int
-
-const (
-	leftToRight direction = iota
-	rightToLeft
-)
-
-type Point struct{ X, Y int }
-type FloatPoint struct{ X, Y float64 }
-type rect struct{ left, top, right, bottom int }
-
-type localMinima struct {
-	Y                     int
-	leftBound, rightBound *edge
-	nextLm                *localMinima
+type TEdge struct {
+	Bot, Curr, Top, Delta            *IntPoint
+	Dx                               float64
+	PolyTyp                          PolyType
+	Side                             EdgeSide
+	WindDelta                        int //1 or -1 depending on winding direction
+	WindCnt                          int
+	WindCnt2                         int //winding count of the opposite polytype
+	OutIdx                           int
+	Next, Prev, NextInLML, NextInAEL *TEdge
+	PrevInAEL, NextInSEL, PrevInSEL  *TEdge
 }
 
-func newLocalMinima(y int, leftBound, rightBound *edge) *localMinima {
-	out := new(localMinima)
-	out.Y = y
-	out.leftBound, out.rightBound = leftBound, rightBound
-	if e2InsertsBeforeE1(leftBound, rightBound) {
-		fmt.Println("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-	}
-	return out
+func (e *TEdge) String() string {
+	return fmt.Sprintf("Bot: %v, Curr: %v, Top: %v, Delta: %v",
+		e.Bot, e.Curr, e.Top, e.Delta)
 }
 
-type scanbeam struct {
-	Y      int
-	nextSb *scanbeam
-}
+//func (e *TEdge) Copy() *TEdge {
+//	o := new(TEdge)
+//	o.Bot = e.Bot.Copy()
+//	o.Curr = e.Curr.Copy()
+//	o.Top = e.Top.Copy()
+//	o.Delta = e.Delta.Copy()
+//	o.Dx = e.Dx
+//	o.PolyTyp = e.PolyTyp
+//	o.Side = e.Side
+//	o.WindDelta, o.WindCnt, o.WindCnt2, o.OutIdx =
+//		e.WindDelta, e.WindCnt, e.WindCnt2, e.OutIdx
+//	return o
+//}
 
-func (self *scanbeam) String() string {
-	s := "nil"
-	if self.nextSb != nil {
-		s = "<obj>"
-	}
-	return fmt.Sprintf("(y:%d, nextSb:%s)", self.Y, s)
-}
-
-type intersectNode struct {
-	e1, e2 *edge
-	pt     *Point
-	nextIn *intersectNode
-}
-
-type outPt struct {
-	idx            int
-	pt             *Point
-	prevOp, nextOp *outPt
-}
-
-func newOutPt(idx int, pt *Point) *outPt {
-	out := new(outPt)
-	out.idx = idx
-	out.pt = pt
-	return out
-}
-
-type outRec struct {
-	idx       int
-	bottomPt  *outPt
-	isHole    bool
-	FirstLeft *outRec
-	pts       *outPt
-	polyNode  *PolyNode
-}
-
-func newOutRec(idx int) *outRec {
-	out := new(outRec)
-	out.idx = idx
-	return out
-}
-
-type joinRec struct {
-	pt1a, pt1b *Point
-	poly1Idx   int
-	pt2a, pt2b *Point
-	poly2Idx   int
-}
-
-type horzJoin struct {
-	edge           *edge
-	savedIdx       int
-	prevHj, nextHj *horzJoin
-}
-
-func newHorzJoin(e *edge, idx int) *horzJoin {
-	hj := new(horzJoin)
-	hj.edge = e
-	hj.savedIdx = idx
-	return hj
-}
-
-//===============================================================================
-// Unit global functions ...
-//===============================================================================
-
-func IntsToPoints(ints []int) []*Point {
-	result := make([]*Point, len(ints)/2)
-	for i := 0; i < len(ints); i += 2 {
-		result[i] = &Point{ints[i], ints[i+1]}
-	}
-	return result
-}
-
-// see http://www.mathopenref.com/coordpolygonarea2.html
-func Area(polygon []*Point) float64 {
-	highI := len(polygon) - 1
-	A := float64((polygon[highI].X +
-		polygon[0].X) * (polygon[0].Y - polygon[highI].Y))
-	for i := 0; i < highI; i++ {
-		A += float64((polygon[i].X +
-			polygon[i+1].X) * (polygon[i+1].Y - polygon[i].Y))
-	}
-	return A / 2.
-}
-
-func AreaCombined(polygons [][]*Point) float64 {
-	a := 0.
-	for _, polygon := range polygons {
-		a += Area(polygon)
-	}
-	return a
-}
-
-func orientation(polygon []*Point) bool {
-	return Area(polygon) > 0.0
-}
-
-//===============================================================================
-// PolyNode & PolyTree classes (+ ancilliary functions)
-//===============================================================================
-
-// Node of PolyTree
-type PolyNode struct {
-	Contour           []*Point
-	Childs            []*PolyNode
-	Parent            *PolyNode
-	Index, ChildCount int
-}
-
-func (self *PolyNode) IsHole() bool {
-	result := true
-	p := self.Parent
+func (e *TEdge) printEdges() string {
+	E := e
+	s := ""
 	for {
-		if p == nil {
+		s += fmt.Sprintf("%v\n", E)
+		E = E.Next
+		if E == e {
 			break
 		}
-		result = !result
-		p = p.Parent
 	}
-	return result
+	return s
 }
 
-func (self *PolyNode) GetNext() *PolyNode {
-	if self.ChildCount > 0 {
-		return self.Childs[0]
-	} else {
-		return self.getNextSiblingUp()
+type IntersectNode struct {
+	Edge1, Edge2 *TEdge
+	Pt           *IntPoint
+}
+
+func (in *IntersectNode) String() string {
+	return fmt.Sprintf("Edge1: %v, Edge2: %v, Pt: %v",
+		in.Edge1, in.Edge2, in.Pt)
+}
+
+type IntersectNodeList []*IntersectNode
+
+func (i IntersectNodeList) Len() int           { return len(i) }
+func (i IntersectNodeList) Less(a, b int) bool { return i[a].Pt.Y < i[b].Pt.Y }
+func (i IntersectNodeList) Swap(a, b int)      { i[a], i[b] = i[b], i[a] }
+
+//  class MyIntersectNodeSort : IComparer<IntersectNode>
+//  {
+//    int Compare(IntersectNode node1, IntersectNode node2)
+//    {
+//      return (int)(node2.Pt.Y - node1.Pt.Y);
+//    }
+//  }
+
+type LocalMinima struct {
+	Y                     cInt
+	LeftBound, RightBound *TEdge
+	Next                  *LocalMinima
+}
+
+func (lm *LocalMinima) String() string {
+	return fmt.Sprintf("Y: %v, LeftBound: %v, RightBound: %v",
+		lm.Y, lm.LeftBound, lm.RightBound)
+}
+
+func (lm *LocalMinima) printLML() string {
+	s := ""
+	LM := lm
+	for {
+		s += fmt.Sprint(LM)
+		if LM.Next == nil {
+			break
+		}
+		LM = LM.Next
+		s += "\n"
 	}
+	return s
 }
 
-func (self *PolyNode) addChild(node *PolyNode) {
-	self.Childs = append(self.Childs, node)
-	node.Index = self.ChildCount
-	node.Parent = self
-	self.ChildCount += 1
+type Scanbeam struct {
+	Y    cInt
+	Next *Scanbeam
 }
 
-func (self *PolyNode) getNextSiblingUp() *PolyNode {
-	if self.Parent == nil {
-		return nil
-	} else if self.Index == self.Parent.ChildCount-1 {
-		return self.Parent.getNextSiblingUp()
-	} else {
-		return self.Parent.Childs[self.Index+1]
-	}
+type OutRec struct {
+	Idx            int
+	IsHole, IsOpen bool
+	FirstLeft      *OutRec //see comments in clipper.pas
+	Pts            *OutPt
+	BottomPt       *OutPt
+	PolyNode       *PolyNode
 }
 
-// Container for PolyNodes
-type PolyTree struct {
-	PolyNode
-	allNodes []*PolyNode
+type OutPt struct {
+	Idx        int
+	Pt         *IntPoint
+	Next, Prev *OutPt
 }
 
-func (self *PolyTree) toPolyNode() *PolyNode {
-	node := new(PolyNode)
-	node.Contour = self.Contour
-	node.Childs = self.Childs
-	node.Parent = self.Parent
-	node.Index, node.ChildCount = self.Index, self.ChildCount
-	return node
+type Join struct {
+	OutPt1, OutPt2 *OutPt
+	OffPt          *IntPoint
 }
 
-func (self *PolyTree) Clear() {
-	self.allNodes = nil
-	self.Childs = nil
-	self.ChildCount = 0
-}
+var horizontal = math.Inf(-1)
 
-func (self *PolyTree) GetFirst() *PolyNode {
-	if self.ChildCount > 0 {
-		return self.Childs[0]
-	} else {
-		return nil
-	}
-}
-
-func (self *PolyTree) Total() int {
-	return len(self.allNodes)
-}
-
-// Internal function for PolyTreeToPolygons()
-func addPolyNodeToPolygons(polynode *PolyNode, polygons [][]*Point) {
-	if len(polynode.Contour) > 0 {
-		polygons = append(polygons, polynode.Contour)
-	}
-	for i := 0; i < polynode.ChildCount; i++ {
-		addPolyNodeToPolygons(polynode.Childs[i], polygons)
-	}
-}
-
-func PolyTreeToPolygons(polyTree *PolyTree) [][]*Point {
-	result := make([][]*Point, 0)
-	addPolyNodeToPolygons(polyTree.toPolyNode(), result)
-	return result
-}
-
-//===============================================================================
-// Edge class
-//===============================================================================
-
-type edge struct {
-	Bot, Curr, Top, Delta                      *Point
-	dx                                         float64
-	polyType                                   PolyType
-	side                                       edgeSide
-	windDelta, windCnt, windCnt2, outIdx       int
-	nextE, prevE, nextInLML                    *edge
-	prevInAEL, nextInAEL, prevInSEL, nextInSEL *edge
-}
-
-func NewEdge() *edge {
-	self := new(edge)
-	self.Bot = new(Point)
-	self.Curr = new(Point)
-	self.Top = new(Point)
-	self.Delta = new(Point)
-	self.outIdx = -1
-	self.polyType = Subject
-	self.side = leftEdge
-	return self
-}
-
-func (self *edge) String() string {
-	return fmt.Sprintf("(bot: %d,%d . top: %d,%d . curr: %d,%d {dx:%0.2f} %d)",
-		self.Bot.X, self.Bot.Y, self.Top.X, self.Top.Y,
-		self.Curr.X, self.Curr.Y, self.dx, self.outIdx)
-}
-
-//===============================================================================
-// ClipperBase class (+ data structs & ancilliary functions)
-//===============================================================================
-
-func pointsEqual(pt1, pt2 *Point) bool {
-	return (pt1.X == pt2.X) && (pt1.Y == pt2.Y)
-}
-
-func slopesEqual(pt1, pt2, pt3, pt4 *Point) bool {
-	if pt4 == nil {
-		return (pt1.Y-pt2.Y)*(pt2.X-pt3.X) == (pt1.X-pt2.X)*(pt2.Y-pt3.Y)
-	} else {
-		return (pt1.Y-pt2.Y)*(pt3.X-pt4.X) == (pt1.X-pt2.X)*(pt3.Y-pt4.Y)
-	}
-}
-
-func slopesEqual2(e1, e2 *edge) bool {
-	return e1.Delta.Y*e2.Delta.X == e1.Delta.X*e2.Delta.Y
-}
-
-func setDx(e *edge) {
-	e.Delta = &Point{e.Top.X - e.Bot.X, e.Top.Y - e.Bot.Y}
-	if e.Delta.Y == 0 {
-		e.dx = horizontal
-	} else {
-		e.dx = float64(e.Delta.X) / float64(e.Delta.Y)
-	}
-}
-
-func swapSides(e1, e2 *edge) {
-	side := e1.side
-	e1.side = e2.side
-	e2.side = side
-}
-
-func swapPolyIndexes(e1, e2 *edge) {
-	idx := e1.outIdx
-	e1.outIdx = e2.outIdx
-	e2.outIdx = idx
-}
-
-func initEdge(e, eNext, ePrev *edge, pt *Point, polyType PolyType) {
-	e.nextE = eNext
-	e.prevE = ePrev
-	e.Curr = pt
-	if e.Curr.Y >= e.nextE.Curr.Y {
-		e.Bot = e.Curr
-		e.Top = e.nextE.Curr
-		e.windDelta = 1
-	} else {
-		e.Top = e.Curr
-		e.Bot = e.nextE.Curr
-		e.windDelta = -1
-	}
-	setDx(e)
-	e.outIdx = -1
-	e.polyType = polyType
-}
-
-func swapX(e *edge) {
-	e.Curr = &Point{e.Top.X, e.Curr.Y}
-	e.Top = &Point{e.Bot.X, e.Top.Y}
-	e.Bot = &Point{e.Curr.X, e.Bot.Y}
-}
+const (
+	Skip       int     = -2
+	Unassigned int     = -1
+	tolerance  float64 = 1.0E-20
+)
 
 type ClipperBase struct {
-	edgeList      [][]*edge    // 2D array
-	localMinList  *localMinima // single-linked list of LocalMinima
-	currentLocMin *localMinima
+	m_MinimaList                   *LocalMinima
+	m_CurrentLM                    *LocalMinima
+	m_edges                        [][]*TEdge
+	m_UseFullRange, m_HasOpenPaths bool
+	PreserveCollinear              bool
 }
 
-func (self *ClipperBase) insertLocalMinima(lm *localMinima) {
-	if self.localMinList == nil {
-		self.localMinList = lm
-	} else if lm.Y >= self.localMinList.Y {
-		lm.nextLm = self.localMinList
-		self.localMinList = lm
-	} else {
-		tmp := self.localMinList
-		for tmp.nextLm != nil && lm.Y < tmp.nextLm.Y {
-			tmp = tmp.nextLm
+func NewClipperBase() *ClipperBase {
+	c := new(ClipperBase)
+	c.m_edges = make([][]*TEdge, 0)
+	return c
+}
+
+func near_zero(val float64) bool {
+	return (val > -tolerance) && (val < tolerance)
+}
+
+func (c *ClipperBase) Swap(val1, val2 *cInt) {
+	tmp := val1
+	val1 = val2
+	val2 = tmp
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) IsHorizontal(e *TEdge) bool {
+	return e.Delta.Y == 0
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) PointIsVertex(pt *IntPoint, pp *OutPt) bool {
+	pp2 := pp
+	for {
+		if pp2.Pt == pt {
+			return true
 		}
-		lm.nextLm = tmp.nextLm
-		tmp.nextLm = lm
+		pp2 = pp2.Next
+		if pp2 == pp {
+			break
+		}
+	}
+	return false
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) PointOnLineSegment(pt,
+	linePt1, linePt2 *IntPoint, UseFullRange bool) bool {
+	if UseFullRange {
+		return ((pt.X == linePt1.X) && (pt.Y == linePt1.Y)) ||
+			((pt.X == linePt2.X) && (pt.Y == linePt2.Y)) ||
+			(((pt.X > linePt1.X) == (pt.X < linePt2.X)) &&
+				((pt.Y > linePt1.Y) == (pt.Y < linePt2.Y)) &&
+				Int128Mul((pt.X-linePt1.X), (linePt2.Y-linePt1.Y)).Cmp(
+					Int128Mul((linePt2.X-linePt1.X), (pt.Y-linePt1.Y))) == 0)
+	} else {
+		return ((pt.X == linePt1.X) && (pt.Y == linePt1.Y)) ||
+			((pt.X == linePt2.X) && (pt.Y == linePt2.Y)) ||
+			(((pt.X > linePt1.X) == (pt.X < linePt2.X)) &&
+				((pt.Y > linePt1.Y) == (pt.Y < linePt2.Y)) &&
+				((pt.X-linePt1.X)*(linePt2.Y-linePt1.Y) ==
+					(linePt2.X-linePt1.X)*(pt.Y-linePt1.Y)))
 	}
 }
 
-func (self *ClipperBase) addBoundsToLML(e *edge) *edge {
-	e.nextInLML = nil
-	e = e.nextE
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) PointOnPolygon(pt *IntPoint, pp *OutPt, UseFullRange bool) bool {
+	pp2 := pp
 	for {
-		if e.dx == horizontal {
-			if (e.nextE.Top.Y < e.Top.Y) && (e.nextE.Bot.X > e.prevE.Bot.X) {
+		if c.PointOnLineSegment(pt, pp2.Pt, pp2.Next.Pt, UseFullRange) {
+			return true
+		}
+		pp2 = pp2.Next
+		if pp2 == pp {
+			break
+		}
+	}
+	return false
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) SlopesEqual(e1, e2 *TEdge, UseFullRange bool) bool {
+	if UseFullRange {
+		return Int128Mul(e1.Delta.Y, e2.Delta.X).Cmp(
+			Int128Mul(e1.Delta.X, e2.Delta.Y)) == 0
+	} else {
+		return (e1.Delta.Y)*(e2.Delta.X) ==
+			(e1.Delta.X)*(e2.Delta.Y)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) SlopesEqual3(pt1, pt2,
+	pt3 *IntPoint, UseFullRange bool) bool {
+	if UseFullRange {
+		return Int128Mul(pt1.Y-pt2.Y, pt2.X-pt3.X).Cmp(
+			Int128Mul(pt1.X-pt2.X, pt2.Y-pt3.Y)) == 0
+	} else {
+		return (pt1.Y-pt2.Y)*(pt2.X-pt3.X)-
+			(pt1.X-pt2.X)*(pt2.Y-pt3.Y) == 0
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) SlopesEqual4(pt1, pt2,
+	pt3, pt4 *IntPoint, UseFullRange bool) bool {
+	if UseFullRange {
+		return Int128Mul(pt1.Y-pt2.Y, pt3.X-pt4.X).Cmp(
+			Int128Mul(pt1.X-pt2.X, pt3.Y-pt4.Y)) == 0
+	} else {
+		return (pt1.Y-pt2.Y)*(pt3.X-pt4.X)-
+			(pt1.X-pt2.X)*(pt3.Y-pt4.Y) == 0
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) Clear() {
+	c.m_edges = make([][]*TEdge, 0)
+	c.m_UseFullRange = false
+	c.m_HasOpenPaths = false
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) DisposeLocalMinimaList() {
+	for c.m_MinimaList != nil {
+		tmpLm := c.m_MinimaList.Next
+		c.m_MinimaList = nil
+		c.m_MinimaList = tmpLm
+	}
+	c.m_CurrentLM = nil
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) RangeTest(Pt *IntPoint, useFullRange *bool) {
+	if *useFullRange {
+		if Pt.X > hiRange || Pt.Y > hiRange || -Pt.X > hiRange || -Pt.Y > hiRange {
+			panic(NewClipperException("Coordinate outside allowed range"))
+		} else if Pt.X > loRange || Pt.Y > loRange || -Pt.X > loRange || -Pt.Y > loRange {
+			*useFullRange = true
+			c.RangeTest(Pt, useFullRange)
+		}
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) InitEdge(e, eNext,
+	ePrev *TEdge, pt *IntPoint) {
+	e.Next = eNext
+	e.Prev = ePrev
+	e.Curr = pt.Copy()
+	e.OutIdx = Unassigned
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) InitEdge2(e *TEdge, polyType PolyType) {
+	if e.Curr.Y >= e.Next.Curr.Y {
+		e.Bot = e.Curr
+		e.Top = e.Next.Curr
+	} else {
+		e.Top = e.Curr
+		e.Bot = e.Next.Curr
+	}
+	c.SetDx(e)
+	e.PolyTyp = polyType
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) FindNextLocMin(E *TEdge) *TEdge {
+	var E2 *TEdge
+	for {
+		for E.Bot != E.Prev.Bot || E.Curr == E.Top {
+			E = E.Next
+		}
+		if E.Dx != horizontal && E.Prev.Dx != horizontal {
+			break
+		}
+		for E.Prev.Dx == horizontal {
+			E = E.Prev
+		}
+		E2 = E
+		for E.Dx == horizontal {
+			E = E.Next
+		}
+		if E.Top.Y == E.Prev.Bot.Y {
+			continue //ie just an intermediate horz.
+		}
+		if E2.Prev.Bot.X < E.Bot.X {
+			E = E2
+		}
+		break
+	}
+	return E
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) ProcessBound(E *TEdge, IsClockwise bool) *TEdge {
+	EStart := E
+	Result := E
+	var Horz *TEdge
+	var StartX cInt
+	if E.Dx == horizontal {
+		//first we need to be careful here with open paths because this
+		//may not be a true local minima (ie may be following a skip edge).
+		//also, watch for adjacent horz edges to start heading left
+		//before finishing right ...
+		if IsClockwise {
+			if E.Prev.Bot.Y == E.Bot.Y {
+				StartX = E.Prev.Bot.X
+			} else {
+				StartX = E.Prev.Top.X
+			}
+		} else {
+			if E.Next.Bot.Y == E.Bot.Y {
+				StartX = E.Next.Bot.X
+			} else {
+				StartX = E.Next.Top.X
+			}
+		}
+		if E.Bot.X != StartX {
+			c.ReverseHorizontal(E)
+		}
+	}
+	if Result.OutIdx != Skip {
+		if IsClockwise {
+			for Result.Top.Y == Result.Next.Bot.Y && Result.Next.OutIdx != Skip {
+				Result = Result.Next
+			}
+			if Result.Dx == horizontal && Result.Next.OutIdx != Skip {
+				//nb: at the top of a bound, horizontals are added to the bound
+				//only when the preceding edge attaches to the horizontal's left vertex
+				//unless a Skip edge is encountered when that becomes the top divide
+				Horz = Result
+				for Horz.Prev.Dx == horizontal {
+					Horz = Horz.Prev
+				}
+				if Horz.Prev.Top.X == Result.Next.Top.X {
+					if !IsClockwise {
+						Result = Horz.Prev
+					}
+				} else if Horz.Prev.Top.X > Result.Next.Top.X {
+					Result = Horz.Prev
+				}
+			}
+			for E != Result {
+				E.NextInLML = E.Next
+				if E.Dx == horizontal && E != EStart && E.Bot.X != E.Prev.Top.X {
+					c.ReverseHorizontal(E)
+				}
+				E = E.Next
+			}
+			if E.Dx == horizontal && E != EStart && E.Bot.X != E.Prev.Top.X {
+				c.ReverseHorizontal(E)
+			}
+			Result = Result.Next //move to the edge just beyond current bound
+		} else {
+			for Result.Top.Y == Result.Prev.Bot.Y && Result.Prev.OutIdx != Skip {
+				Result = Result.Prev
+			}
+			if Result.Dx == horizontal && Result.Prev.OutIdx != Skip {
+				Horz = Result
+				for Horz.Next.Dx == horizontal {
+					Horz = Horz.Next
+				}
+				if Horz.Next.Top.X == Result.Prev.Top.X {
+					if !IsClockwise {
+						Result = Horz.Next
+					}
+				} else if Horz.Next.Top.X > Result.Prev.Top.X {
+					Result = Horz.Next
+				}
+			}
+
+			for E != Result {
+				E.NextInLML = E.Prev
+				if E.Dx == horizontal && E != EStart && E.Bot.X != E.Next.Top.X {
+					c.ReverseHorizontal(E)
+				}
+				E = E.Prev
+			}
+			if E.Dx == horizontal && E != EStart && E.Bot.X != E.Next.Top.X {
+				c.ReverseHorizontal(E)
+			}
+			Result = Result.Prev //move to the edge just beyond current bound
+		}
+	}
+
+	if Result.OutIdx == Skip {
+		//if edges still remain in the current bound beyond the skip edge then
+		//create another LocMin and call ProcessBound once more
+		E = Result
+		if IsClockwise {
+			for E.Top.Y == E.Next.Bot.Y {
+				E = E.Next
+			}
+			//don't include top horizontals when parsing a bound a second time,
+			//they will be contained in the opposite bound ...
+			for E != Result && E.Dx == horizontal {
+				E = E.Prev
+			}
+		} else {
+			for E.Top.Y == E.Prev.Bot.Y {
+				E = E.Prev
+			}
+			for E != Result && E.Dx == horizontal {
+				E = E.Next
+			}
+		}
+		if E == Result {
+			if IsClockwise {
+				Result = E.Next
+			} else {
+				Result = E.Prev
+			}
+		} else {
+			//there are more edges in the bound beyond result starting with E
+			if IsClockwise {
+				E = Result.Next
+			} else {
+				E = Result.Prev
+			}
+			locMin := new(LocalMinima)
+			locMin.Y = E.Bot.Y
+			locMin.RightBound = E
+			locMin.RightBound.WindDelta = 0
+			Result = c.ProcessBound(locMin.RightBound, IsClockwise)
+			c.InsertLocalMinima(locMin)
+		}
+	}
+	return Result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) AddPath(pg Path, polyType PolyType, Closed bool) bool {
+	if !Closed && polyType == ptClip {
+		panic(NewClipperException("AddPath: Open paths must be subject."))
+	}
+
+	highI := len(pg) - 1
+	if Closed {
+		for highI > 0 && (pg[highI] == pg[0]) {
+			highI--
+		}
+	}
+	for highI > 0 && (pg[highI] == pg[highI-1]) {
+		highI--
+	}
+	if (Closed && highI < 2) || (!Closed && highI < 1) {
+		return false
+	}
+
+	//create a new edge array ...
+	edges := make([]*TEdge, highI+1)
+	for i := 0; i <= highI; i++ {
+		edges[i] = new(TEdge)
+	}
+
+	IsFlat := true
+
+	//1. Basic (first) edge initialization ...
+	edges[1].Curr = pg[1]
+	c.RangeTest(pg[0], &c.m_UseFullRange)
+	c.RangeTest(pg[highI], &c.m_UseFullRange)
+	c.InitEdge(edges[0], edges[1], edges[highI], pg[0])
+	c.InitEdge(edges[highI], edges[0], edges[highI-1], pg[highI])
+	for i := highI - 1; i >= 1; i-- {
+		c.RangeTest(pg[i], &c.m_UseFullRange)
+		c.InitEdge(edges[i], edges[i+1], edges[i-1], pg[i])
+	}
+	eStart := edges[0]
+
+	//2. Remove duplicate vertices, and (when closed) collinear edges ...
+	E := eStart
+	eLoopStop := eStart
+	for {
+		if E.Curr == E.Next.Curr {
+			if E == E.Next {
 				break
 			}
-			if e.Top.X != e.prevE.Bot.X {
-				swapX(e)
+			if E == eStart {
+				eStart = E.Next
 			}
-			e.nextInLML = e.prevE
-		} else if e.Bot.Y == e.prevE.Bot.Y {
-			break
-		} else {
-			e.nextInLML = e.prevE
-		}
-		e = e.nextE
-	}
-
-	var lm *localMinima
-	if e.dx == horizontal {
-		if e.Bot.X != e.prevE.Bot.X {
-			swapX(e)
-		}
-		lm = newLocalMinima(e.prevE.Bot.Y, e.prevE, e)
-		//} else if e.dx < e.prevE.dx {
-	} else if e2InsertsBeforeE1(e, e.prevE) {
-		lm = newLocalMinima(e.prevE.Bot.Y, e.prevE, e)
-	} else {
-		lm = newLocalMinima(e.prevE.Bot.Y, e, e.prevE)
-	}
-	lm.leftBound.side = leftEdge
-	lm.rightBound.side = rightEdge
-	self.insertLocalMinima(lm)
-	for {
-		if e.nextE.Top.Y == e.Top.Y && e.nextE.dx != horizontal {
-			break
-		}
-		e.nextInLML = e.nextE
-		e = e.nextE
-		if e.dx == horizontal && e.Bot.X != e.prevE.Top.X {
-			swapX(e)
-		}
-	}
-	return e.nextE
-}
-
-func (self *ClipperBase) resetBase() {
-	lm := self.localMinList
-	if lm != nil {
-		self.currentLocMin = lm
-	}
-	for lm != nil {
-		e := lm.leftBound
-		for e != nil {
-			e.Curr = e.Bot
-			e.side = leftEdge
-			e.outIdx = -1
-			e = e.nextInLML
-		}
-		e = lm.rightBound
-		for e != nil {
-			e.Curr = e.Bot
-			e.side = rightEdge
-			e.outIdx = -1
-			e = e.nextInLML
-		}
-		lm = lm.nextLm
-	}
-}
-
-func (self *ClipperBase) AddPolygon(polygon []*Point, polyType PolyType) bool {
-	ln := len(polygon)
-	if ln < 3 {
-		return false
-	}
-	pg := make([]*Point, len(polygon))
-	copy(pg, polygon)
-	j := 0
-	// remove duplicate points && co-linear points
-	for i := 1; i < len(polygon); i++ {
-		if pointsEqual(pg[j], polygon[i]) {
+			E = c.RemoveEdge(E)
+			eLoopStop = E
 			continue
-		} else if (j > 0) && slopesEqual(pg[j-1], pg[j], polygon[i], nil) {
-			if pointsEqual(pg[j-1], polygon[i]) {
-				j -= 1
-			}
-		} else {
-			j += 1
 		}
-		pg[j] = polygon[i]
+		if E.Prev == E.Next {
+			break //only two vertices
+		} else if Closed &&
+			c.SlopesEqual3(E.Prev.Curr, E.Curr, E.Next.Curr, c.m_UseFullRange) &&
+			(!c.PreserveCollinear ||
+				!c.Pt2IsBetweenPt1AndPt3(E.Prev.Curr, E.Curr, E.Next.Curr)) {
+			//Collinear edges are allowed for open paths but in closed paths
+			//the default is to merge adjacent collinear edges into a single edge.
+			//However, if the PreserveCollinear property is enabled, only overlapping
+			//collinear edges (ie spikes) will be removed from closed paths.
+			if E == eStart {
+				eStart = E.Next
+			}
+			E = c.RemoveEdge(E)
+			E = E.Prev
+			eLoopStop = E
+			continue
+		}
+		E = E.Next
+		if (E == eLoopStop) || (!Closed && E.Next == eStart) {
+			break
+		}
 	}
-	if j < 2 {
+
+	if (!Closed && (E == E.Next)) || (Closed && (E.Prev == E.Next)) {
 		return false
 	}
-	// remove duplicate points && co-linear edges at the loop around
-	// of the start && end coordinates ...
-	ln = j + 1
-	for ln > 2 {
-		if pointsEqual(pg[j], pg[0]) {
-			j -= 1
-		} else if pointsEqual(pg[0], pg[1]) ||
-			slopesEqual(pg[j], pg[0], pg[1], nil) {
-			pg[0] = pg[j]
-			j -= 1
-		} else if slopesEqual(pg[j-1], pg[j], pg[0], nil) {
-			j -= 1
-		} else if slopesEqual(pg[0], pg[1], pg[2], nil) {
-			for i := 2; i < j+1; i++ {
-				pg[i-1] = pg[i]
+
+	if !Closed {
+		c.m_HasOpenPaths = true
+		eStart.Prev.OutIdx = Skip
+	}
+
+	//3. Do second stage of edge initialization ...
+	E = eStart
+	for {
+		c.InitEdge2(E, polyType)
+		E = E.Next
+		if IsFlat && E.Curr.Y != eStart.Curr.Y {
+			IsFlat = false
+		}
+		if E == eStart {
+			break
+		}
+	}
+
+	//4. Finally, add edge bounds to LocalMinima list ...
+
+	//Totally flat paths must be handled differently when adding them
+	//to LocalMinima list to avoid endless loops etc ...
+	if IsFlat {
+		if Closed {
+			return false
+		}
+		E.Prev.OutIdx = Skip
+		if E.Prev.Bot.X < E.Prev.Top.X {
+			c.ReverseHorizontal(E.Prev)
+		}
+		locMin := new(LocalMinima)
+		locMin.Next = nil
+		locMin.Y = E.Bot.Y
+		locMin.LeftBound = nil
+		locMin.RightBound = E
+		locMin.RightBound.Side = esRight
+		locMin.RightBound.WindDelta = 0
+		for E.Next.OutIdx != Skip {
+			E.NextInLML = E.Next
+			if E.Bot.X != E.Prev.Top.X {
+				c.ReverseHorizontal(E)
 			}
-			j -= 1
+			E = E.Next
+		}
+		c.InsertLocalMinima(locMin)
+		c.m_edges = append(c.m_edges, edges)
+		return true
+	}
+
+	c.m_edges = append(c.m_edges, edges)
+	var clockwise bool
+	var EMin *TEdge
+	for {
+		E = c.FindNextLocMin(E)
+		if E == EMin {
+			break
+		} else if EMin == nil {
+			EMin = E
+		}
+
+		//E and E.Prev now share a local minima (left aligned if horizontal).
+		//Compare their slopes to find which starts which bound ...
+		locMin := new(LocalMinima)
+		locMin.Next = nil
+		locMin.Y = E.Bot.Y
+		if E.Dx < E.Prev.Dx {
+			locMin.LeftBound = E.Prev
+			locMin.RightBound = E
+			clockwise = false //Q.nextInLML = Q.prev
 		} else {
-			break
+			locMin.LeftBound = E
+			locMin.RightBound = E.Prev
+			clockwise = true //Q.nextInLML = Q.next
 		}
-		ln -= 1
-	}
-	if ln < 3 {
-		return false
-	}
-	edges := make([]*edge, 0)
-	for i := 0; i < ln; i++ {
-		edges = append(edges, NewEdge())
-	}
-	edges[0].Curr = pg[0]
-	initEdge(edges[ln-1], edges[0], edges[ln-2], pg[ln-1], polyType)
-	for i := ln - 2; i > 0; i-- {
-		initEdge(edges[i], edges[i+1], edges[i-1], pg[i], polyType)
-	}
-	initEdge(edges[0], edges[1], edges[ln-1], pg[0], polyType)
-	e := edges[0]
-	eHighest := e
-	for {
-		e.Curr = e.Bot
-		if e.Top.Y < eHighest.Top.Y {
-			eHighest = e
+		locMin.LeftBound.Side = esLeft
+		locMin.RightBound.Side = esRight
+
+		if !Closed {
+			locMin.LeftBound.WindDelta = 0
+		} else if locMin.LeftBound.Next == locMin.RightBound {
+			locMin.LeftBound.WindDelta = -1
+		} else {
+			locMin.LeftBound.WindDelta = 1
 		}
-		e = e.nextE
-		if e == edges[0] {
-			break
+		locMin.RightBound.WindDelta = -locMin.LeftBound.WindDelta
+
+		E = c.ProcessBound(locMin.LeftBound, clockwise)
+		E2 := c.ProcessBound(locMin.RightBound, !clockwise)
+
+		if locMin.LeftBound.OutIdx == Skip {
+			locMin.LeftBound = nil
+		} else if locMin.RightBound.OutIdx == Skip {
+			locMin.RightBound = nil
 		}
-	}
-	// make sure eHighest is positioned so the following loop works safely ...
-	if eHighest.windDelta > 0 {
-		eHighest = eHighest.nextE
-	}
-	if eHighest.dx == horizontal {
-		eHighest = eHighest.nextE
-	}
-	// finally insert each local minima ...
-	e = eHighest
-	for {
-		e = self.addBoundsToLML(e)
-		if e == eHighest {
-			break
+		c.InsertLocalMinima(locMin)
+		if !clockwise {
+			E = E2
 		}
 	}
-	self.edgeList = append(self.edgeList, edges)
 	return true
 }
 
-func (self *ClipperBase) AddPolygons(polygons [][]*Point, polyType PolyType) bool {
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) AddPaths(ppg Paths, polyType PolyType, closed bool) bool {
 	result := false
-	for _, p := range polygons {
-		if self.AddPolygon(p, polyType) {
+	for i := 0; i < len(ppg); i++ {
+		if c.AddPath(ppg[i], polyType, closed) {
 			result = true
-		} else {
-			break
 		}
 	}
 	return result
 }
 
-func (self *ClipperBase) clearBase() {
-	self.edgeList = make([][]*edge, 0)
-	self.localMinList = nil
-	self.currentLocMin = nil
-}
+//------------------------------------------------------------------------------
 
-func (self *ClipperBase) popLocalMinima() {
-	if self.currentLocMin != nil {
-		self.currentLocMin = self.currentLocMin.nextLm
-	}
-}
-
-//===============================================================================
-// Clipper class (+ data structs & ancilliary functions)
-//===============================================================================
-func intersectPoint(edge1, edge2 *edge) (*Point, bool) {
-	var x, y int
-	if slopesEqual2(edge1, edge2) {
-		if edge2.Bot.Y > edge1.Bot.Y {
-			y = edge2.Bot.Y
-		} else {
-			y = edge1.Bot.Y
-		}
-		return &Point{0, y}, false
-	}
-	if edge1.dx == 0 {
-		x = edge1.Bot.X
-		if edge2.dx == horizontal {
-			y = edge2.Bot.Y
-		} else {
-			b2 := float64(edge2.Bot.Y) - float64(edge2.Bot.X)/edge2.dx
-			y = round(float64(x)/edge2.dx + b2)
-		}
-	} else if edge2.dx == 0 {
-		x = edge2.Bot.X
-		if edge1.dx == horizontal {
-			y = edge1.Bot.Y
-		} else {
-			b1 := float64(edge1.Bot.Y) - float64(edge1.Bot.X)/edge1.dx
-			y = round(float64(x)/edge1.dx + b1)
-		}
+func (c *ClipperBase) Pt2IsBetweenPt1AndPt3(pt1, pt2, pt3 *IntPoint) bool {
+	if (pt1 == pt3) || (pt1 == pt2) || (pt3 == pt2) {
+		return false
+	} else if pt1.X != pt3.X {
+		return (pt2.X > pt1.X) == (pt2.X < pt3.X)
 	} else {
-		b1 := float64(edge1.Bot.X) - float64(edge1.Bot.Y)*edge1.dx
-		b2 := float64(edge2.Bot.X) - float64(edge2.Bot.Y)*edge2.dx
-		m := (b2 - b1) / (edge1.dx - edge2.dx)
-		y = round(m)
-		if math.Abs(edge1.dx) < math.Abs(edge2.dx) {
-			x = round(edge1.dx*m + b1)
-		} else {
-			x = round(edge2.dx*m + b2)
-		}
-	}
-	if (y < edge1.Top.Y) || (y < edge2.Top.Y) {
-		if edge1.Top.Y > edge2.Top.Y {
-			return edge1.Top, topX(edge2, edge1.Top.Y) < edge1.Top.X
-		} else {
-			return edge2.Top, topX(edge1, edge2.Top.Y) > edge2.Top.X
-		}
-	} else {
-		return &Point{x, y}, true
+		return (pt2.Y > pt1.Y) == (pt2.Y < pt3.Y)
 	}
 }
 
-func topX(e *edge, currentY int) int {
-	if currentY == e.Top.Y {
-		return e.Top.X
-	} else if e.Top.X == e.Bot.X {
-		return e.Bot.X
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) RemoveEdge(e *TEdge) *TEdge {
+	//removes e from float64_linked_list (but without removing from memory)
+	e.Prev.Next = e.Next
+	e.Next.Prev = e.Prev
+	result := e.Next
+	e.Prev = nil //flag as removed (see ClipperBase.Clear)
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) SetDx(e *TEdge) {
+	e.Delta = &IntPoint{(e.Top.X - e.Bot.X), (e.Top.Y - e.Bot.Y)}
+	if e.Delta.Y == 0 {
+		e.Dx = horizontal
 	} else {
-		return e.Bot.X + round(e.dx*float64(currentY-e.Bot.Y))
+		e.Dx = float64(e.Delta.X) / float64(e.Delta.Y)
 	}
 }
 
-func e2InsertsBeforeE1(e1, e2 *edge) bool {
+//---------------------------------------------------------------------------
+
+func (c *ClipperBase) InsertLocalMinima(newLm *LocalMinima) {
+	if c.m_MinimaList == nil {
+		c.m_MinimaList = newLm
+	} else if newLm.Y >= c.m_MinimaList.Y {
+		newLm.Next = c.m_MinimaList
+		c.m_MinimaList = newLm
+	} else {
+		tmpLm := c.m_MinimaList
+		for tmpLm.Next != nil && (newLm.Y < tmpLm.Next.Y) {
+			tmpLm = tmpLm.Next
+		}
+		newLm.Next = tmpLm.Next
+		tmpLm.Next = newLm
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) PopLocalMinima() {
+	if c.m_CurrentLM == nil {
+		return
+	}
+	c.m_CurrentLM = c.m_CurrentLM.Next
+}
+
+//------------------------------------------------------------------------------
+
+//------------------------------------------------------------------------------
+
+func (c *ClipperBase) Reset() {
+	c.m_CurrentLM = c.m_MinimaList
+	if c.m_CurrentLM == nil {
+		return //ie nothing to process
+	}
+
+	//reset all edges ...
+	lm := c.m_MinimaList
+	for lm != nil {
+		e := lm.LeftBound
+		if e != nil {
+			e.Curr = e.Bot
+			e.Side = esLeft
+			e.OutIdx = Unassigned
+		}
+		e = lm.RightBound
+		if e != nil {
+			e.Curr = e.Bot
+			e.Side = esRight
+			e.OutIdx = Unassigned
+		}
+		lm = lm.Next
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func GetBounds(paths Paths) *IntRect {
+	i := 0
+	cnt := len(paths)
+	for i < cnt && len(paths[i]) == 0 {
+		i++
+	}
+	if i == cnt {
+		return &IntRect{0, 0, 0, 0}
+	}
+	result := new(IntRect)
+	result.left = paths[i][0].X
+	result.right = result.left
+	result.top = paths[i][0].Y
+	result.bottom = result.top
+	for i < cnt {
+		for j := 0; j < len(paths[i]); j++ {
+			if paths[i][j].X < result.left {
+				result.left = paths[i][j].X
+			} else if paths[i][j].X > result.right {
+				result.right = paths[i][j].X
+			}
+			if paths[i][j].Y < result.top {
+				result.top = paths[i][j].Y
+			} else if paths[i][j].Y > result.bottom {
+				result.bottom = paths[i][j].Y
+			}
+		}
+		i++
+	}
+	return result
+}
+
+//InitOptions that can be passed to the constructor ...
+type InitOptions int
+
+const (
+	ioNone              InitOptions = 0
+	ioReverseSolution   InitOptions = 1
+	ioStrictlySimple    InitOptions = 2
+	ioPreserveCollinear InitOptions = 4
+)
+
+type TZFillCallback interface {
+	ZFill(bot1, top1, bot2, top2, intersectPt *IntPoint)
+}
+
+type Clipper struct {
+	ClipperBase
+
+	m_PolyOuts      []*OutRec
+	m_ClipType      ClipType
+	m_Scanbeam      *Scanbeam
+	m_ActiveEdges   *TEdge
+	m_SortedEdges   *TEdge
+	m_IntersectList []*IntersectNode
+	//	m_IntersectNodeComparer         IComparer_IntersectNode
+	m_ExecuteLocked                 bool
+	m_ClipFillType                  PolyFillType
+	m_SubjFillType                  PolyFillType
+	m_Joins                         []*Join
+	m_GhostJoins                    []*Join
+	m_UsingPolyTree                 bool
+	ZFillFunction                   TZFillCallback
+	ReverseSolution, StrictlySimple bool
+}
+
+func NewClipper(initOptions InitOptions) *Clipper {
+	c := new(Clipper)
+	c.m_edges = make([][]*TEdge, 0)
+	c.m_Scanbeam = nil
+	c.m_ActiveEdges = nil
+	c.m_SortedEdges = nil
+	c.m_IntersectList = make([]*IntersectNode, 0)
+	//  c.m_IntersectNodeComparer = new MyIntersectNodeSort();
+	c.m_ExecuteLocked = false
+	c.m_UsingPolyTree = false
+	c.m_PolyOuts = make([]*OutRec, 0)
+	c.m_Joins = make([]*Join, 0)
+	c.m_GhostJoins = make([]*Join, 0)
+	c.ReverseSolution = (ioReverseSolution == initOptions)
+	c.StrictlySimple = (ioStrictlySimple == initOptions)
+	c.PreserveCollinear = (ioPreserveCollinear == initOptions)
+	return c
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DisposeScanbeamList() {
+	for c.m_Scanbeam != nil {
+		sb2 := c.m_Scanbeam.Next
+		c.m_Scanbeam = nil
+		c.m_Scanbeam = sb2
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) Reset() {
+	c.m_CurrentLM = c.m_MinimaList
+	if c.m_CurrentLM != nil {
+		//reset all edges ...
+		lm := c.m_MinimaList
+		for lm != nil {
+			e := lm.LeftBound
+			if e != nil {
+				e.Curr = e.Bot
+				e.Side = esLeft
+				e.OutIdx = Unassigned
+			}
+			e = lm.RightBound
+			if e != nil {
+				e.Curr = e.Bot
+				e.Side = esRight
+				e.OutIdx = Unassigned
+			}
+			lm = lm.Next
+		}
+	}
+	c.m_Scanbeam = nil
+	c.m_ActiveEdges = nil
+	c.m_SortedEdges = nil
+	lm := c.m_MinimaList
+	for lm != nil {
+		c.InsertScanbeam(lm.Y)
+		lm = lm.Next
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) InsertScanbeam(Y cInt) {
+	if c.m_Scanbeam == nil {
+		c.m_Scanbeam = new(Scanbeam)
+		c.m_Scanbeam.Next = nil
+		c.m_Scanbeam.Y = Y
+	} else if Y > c.m_Scanbeam.Y {
+		newSb := new(Scanbeam)
+		newSb.Y = Y
+		newSb.Next = c.m_Scanbeam
+		c.m_Scanbeam = newSb
+	} else {
+		sb2 := c.m_Scanbeam
+		for sb2.Next != nil && (Y <= sb2.Next.Y) {
+			sb2 = sb2.Next
+		}
+		if Y == sb2.Y {
+			return //ie ignores duplicates
+		}
+		newSb := new(Scanbeam)
+		newSb.Y = Y
+		newSb.Next = sb2.Next
+		sb2.Next = newSb
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) Execute1(clipType ClipType,
+	subjFillType, clipFillType PolyFillType) (solution Paths, succeeded bool) {
+	if c.m_ExecuteLocked {
+		return
+	} else {
+		defer func() {
+			c.DisposeAllPolyPts()
+			c.m_ExecuteLocked = false
+		}()
+	}
+	if c.m_HasOpenPaths {
+		panic(NewClipperException("Error: PolyTree struct is needed for " +
+			"open path clipping."))
+	}
+
+	c.m_ExecuteLocked = true
+	c.m_SubjFillType = subjFillType
+	c.m_ClipFillType = clipFillType
+	c.m_ClipType = clipType
+	c.m_UsingPolyTree = false
+
+	succeeded = c.ExecuteInternal()
+	//build the return polygons ...
+	if succeeded {
+		solution = c.BuildResult()
+	}
+	return
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) Execute2(clipType ClipType,
+	subjFillType, clipFillType PolyFillType) (polytree *PolyTree, succeeded bool) {
+	if c.m_ExecuteLocked {
+		return
+	} else {
+		defer func() {
+			c.DisposeAllPolyPts()
+			c.m_ExecuteLocked = false
+		}()
+	}
+	c.m_ExecuteLocked = true
+	c.m_SubjFillType = subjFillType
+	c.m_ClipFillType = clipFillType
+	c.m_ClipType = clipType
+	c.m_UsingPolyTree = true
+
+	succeeded = c.ExecuteInternal()
+	//build the return polygons ...
+	if succeeded {
+		c.BuildResult2(polytree)
+	}
+	return
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) FixHoleLinkage(outRec *OutRec) {
+	//skip if an outermost polygon or
+	//already already points to the correct FirstLeft ...
+	if outRec.FirstLeft == nil ||
+		(outRec.IsHole != outRec.FirstLeft.IsHole &&
+			outRec.FirstLeft.Pts != nil) {
+		return
+	}
+
+	orfl := outRec.FirstLeft
+	for orfl != nil && ((orfl.IsHole == outRec.IsHole) || orfl.Pts == nil) {
+		orfl = orfl.FirstLeft
+	}
+	outRec.FirstLeft = orfl
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ExecuteInternal() bool {
+	defer func() {
+		c.m_Joins = make([]*Join, 0)
+		c.m_GhostJoins = make([]*Join, 0)
+	}()
+
+	c.Reset()
+	if c.m_CurrentLM == nil {
+		return false
+	}
+
+	botY := c.PopScanbeam()
+	for {
+		c.InsertLocalMinimaIntoAEL(botY)
+		c.m_GhostJoins = make([]*Join, 0)
+		c.ProcessHorizontals(false)
+		if c.m_Scanbeam == nil {
+			break
+		}
+		topY := c.PopScanbeam()
+		if !c.ProcessIntersections(botY, topY) {
+			return false
+		}
+		c.ProcessEdgesAtTopOfScanbeam(topY)
+		botY = topY
+		if !(c.m_Scanbeam != nil || c.m_CurrentLM != nil) {
+			break
+		}
+	}
+
+	//fix orientations ...
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		outRec := c.m_PolyOuts[i]
+		if outRec.Pts == nil || outRec.IsOpen {
+			continue
+		}
+		if (outRec.IsHole != c.ReverseSolution) == (c.area(outRec) > 0) {
+			c.ReversePolyPtLinks(outRec.Pts)
+		}
+	}
+
+	c.JoinCommonEdges()
+
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		outRec := c.m_PolyOuts[i]
+		if outRec.Pts != nil && !outRec.IsOpen {
+			c.FixupOutPolygon(outRec)
+		}
+	}
+
+	if c.StrictlySimple {
+		c.DoSimplePolygons()
+	}
+	return true
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) PopScanbeam() cInt {
+	Y := c.m_Scanbeam.Y
+	c.m_Scanbeam = c.m_Scanbeam.Next
+	return Y
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DisposeAllPolyPts() {
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		c.DisposeOutRec(i)
+	}
+	c.m_PolyOuts = make([]*OutRec, 0)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DisposeOutRec(index int) {
+	outRec := c.m_PolyOuts[index]
+	outRec.Pts = nil
+	outRec = nil
+	c.m_PolyOuts[index] = nil
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AddJoin(Op1, Op2 *OutPt, OffPt *IntPoint) {
+	j := new(Join)
+	j.OutPt1 = Op1
+	j.OutPt2 = Op2
+	j.OffPt = OffPt
+	c.m_Joins = append(c.m_Joins, j)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AddGhostJoin(Op *OutPt, OffPt *IntPoint) {
+	j := new(Join)
+	j.OutPt1 = Op
+	j.OffPt = OffPt
+	c.m_GhostJoins = append(c.m_GhostJoins, j)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) InsertLocalMinimaIntoAEL(botY cInt) {
+	for c.m_CurrentLM != nil && (c.m_CurrentLM.Y == botY) {
+		lb := c.m_CurrentLM.LeftBound
+		rb := c.m_CurrentLM.RightBound
+		c.PopLocalMinima()
+
+		var Op1 *OutPt
+		if lb == nil {
+			c.InsertEdgeIntoAEL(rb, nil)
+			c.SetWindingCount(rb)
+			if c.IsContributing(rb) {
+				Op1 = c.AddOutPt(rb, rb.Bot)
+			}
+		} else if rb == nil {
+			c.InsertEdgeIntoAEL(lb, nil)
+			c.SetWindingCount(lb)
+			if c.IsContributing(lb) {
+				Op1 = c.AddOutPt(lb, lb.Bot)
+			}
+			c.InsertScanbeam(lb.Top.Y)
+		} else {
+			c.InsertEdgeIntoAEL(lb, nil)
+			c.InsertEdgeIntoAEL(rb, lb)
+			c.SetWindingCount(lb)
+			rb.WindCnt = lb.WindCnt
+			rb.WindCnt2 = lb.WindCnt2
+			if c.IsContributing(lb) {
+				Op1 = c.AddLocalMinPoly(lb, rb, lb.Bot)
+			}
+			c.InsertScanbeam(lb.Top.Y)
+		}
+
+		if rb != nil {
+			if c.IsHorizontal(rb) {
+				c.AddEdgeToSEL(rb)
+			} else {
+				c.InsertScanbeam(rb.Top.Y)
+			}
+		}
+
+		if lb == nil || rb == nil {
+			continue
+		}
+
+		//if output polygons share an Edge with a horizontal rb, they'll need joining later ...
+		if Op1 != nil && c.IsHorizontal(rb) &&
+			len(c.m_GhostJoins) > 0 && rb.WindDelta != 0 {
+			for i := 0; i < len(c.m_GhostJoins); i++ {
+				//if the horizontal Rb and a 'ghost' horizontal overlap, then convert
+				//the 'ghost' join to a real join ready for later ...
+				j := c.m_GhostJoins[i]
+				if c.HorzSegmentsOverlap(j.OutPt1.Pt.X, j.OffPt.X, rb.Bot.X, rb.Top.X) {
+					c.AddJoin(j.OutPt1, Op1, j.OffPt)
+				}
+			}
+		}
+
+		if lb.OutIdx >= 0 && lb.PrevInAEL != nil &&
+			lb.PrevInAEL.Curr.X == lb.Bot.X &&
+			lb.PrevInAEL.OutIdx >= 0 &&
+			c.SlopesEqual(lb.PrevInAEL, lb, c.m_UseFullRange) &&
+			lb.WindDelta != 0 && lb.PrevInAEL.WindDelta != 0 {
+			Op2 := c.AddOutPt(lb.PrevInAEL, lb.Bot)
+			c.AddJoin(Op1, Op2, lb.Top)
+		}
+
+		if lb.NextInAEL != rb {
+			if rb.OutIdx >= 0 && rb.PrevInAEL.OutIdx >= 0 &&
+				c.SlopesEqual(rb.PrevInAEL, rb, c.m_UseFullRange) &&
+				rb.WindDelta != 0 && rb.PrevInAEL.WindDelta != 0 {
+				Op2 := c.AddOutPt(rb.PrevInAEL, rb.Bot)
+				c.AddJoin(Op1, Op2, rb.Top)
+			}
+
+			e := lb.NextInAEL
+			if e != nil {
+				for e != rb {
+					//nb: For calculating winding counts etc, IntersectEdges() assumes
+					//that param1 will be to the right of param2 ABOVE the intersection ...
+					c.IntersectEdges(rb, e, lb.Curr, true) //order important here
+					e = e.NextInAEL
+				}
+			}
+		}
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) InsertEdgeIntoAEL(edge, startEdge *TEdge) {
+	if c.m_ActiveEdges == nil {
+		edge.PrevInAEL = nil
+		edge.NextInAEL = nil
+		c.m_ActiveEdges = edge
+	} else if startEdge == nil && c.E2InsertsBeforeE1(c.m_ActiveEdges, edge) {
+		edge.PrevInAEL = nil
+		edge.NextInAEL = c.m_ActiveEdges
+		c.m_ActiveEdges.PrevInAEL = edge
+		c.m_ActiveEdges = edge
+	} else {
+		if startEdge == nil {
+			startEdge = c.m_ActiveEdges
+		}
+		for startEdge.NextInAEL != nil &&
+			!c.E2InsertsBeforeE1(startEdge.NextInAEL, edge) {
+			startEdge = startEdge.NextInAEL
+		}
+		edge.NextInAEL = startEdge.NextInAEL
+		if startEdge.NextInAEL != nil {
+			startEdge.NextInAEL.PrevInAEL = edge
+		}
+		edge.PrevInAEL = startEdge
+		startEdge.NextInAEL = edge
+	}
+}
+
+//----------------------------------------------------------------------
+
+func (c *Clipper) E2InsertsBeforeE1(e1, e2 *TEdge) bool {
 	if e2.Curr.X == e1.Curr.X {
 		if e2.Top.Y > e1.Top.Y {
-			return e2.Top.X < topX(e1, e2.Top.Y)
+			return e2.Top.X < c.TopX(e1, &e2.Top.Y)
+		} else {
+			return e1.Top.X > c.TopX(e2, &e1.Top.Y)
 		}
-		return e1.Top.X > topX(e2, e1.Top.Y)
 	} else {
 		return e2.Curr.X < e1.Curr.X
 	}
 }
 
-func isMinima(e *edge) bool {
-	return (e != nil) && (e.prevE.nextInLML != e) && (e.nextE.nextInLML != e)
-}
+//------------------------------------------------------------------------------
 
-func isMaxima(e *edge, y int) bool {
-	return (e != nil) && (e.Top.Y == y) && (e.nextInLML == nil)
-}
-
-func isIntermediate(e *edge, y int) bool {
-	return e.Top.Y == y && e.nextInLML != nil
-}
-
-func getMaximaPair(e *edge) *edge {
-	if !isMaxima(e.nextE, e.Top.Y) || e.nextE.Top.X != e.Top.X {
-		return e.prevE
+func (c *Clipper) IsEvenOddFillType(edge *TEdge) bool {
+	if edge.PolyTyp == ptSubject {
+		return c.m_SubjFillType == pftEvenOdd
 	} else {
-		return e.nextE
+		return c.m_ClipFillType == pftEvenOdd
 	}
 }
 
-func getnextInAEL(e *edge, dir direction) *edge {
-	if dir == leftToRight {
-		return e.nextInAEL
+//------------------------------------------------------------------------------
+
+func (c *Clipper) IsEvenOddAltFillType(edge *TEdge) bool {
+	if edge.PolyTyp == ptSubject {
+		return c.m_ClipFillType == pftEvenOdd
 	} else {
-		return e.prevInAEL
+		return c.m_SubjFillType == pftEvenOdd
 	}
 }
 
-func protectLeft(val bool) protects {
-	if val {
-		return protectsBoth
+//------------------------------------------------------------------------------
+
+func (c *Clipper) IsContributing(edge *TEdge) bool {
+	var pft, pft2 PolyFillType
+	if edge.PolyTyp == ptSubject {
+		pft = c.m_SubjFillType
+		pft2 = c.m_ClipFillType
 	} else {
-		return protectsRight
+		pft = c.m_ClipFillType
+		pft2 = c.m_SubjFillType
+	}
+
+	switch pft {
+	case pftEvenOdd:
+		//return false if a subj line has been flagged as inside a subj polygon
+		if edge.WindDelta == 0 && edge.WindCnt != 1 {
+			return false
+		}
+		break
+	case pftNonZero:
+		if intAbs(edge.WindCnt) != 1 {
+			return false
+		}
+		break
+	case pftPositive:
+		if edge.WindCnt != 1 {
+			return false
+		}
+		break
+	default: //PolyFillType.pftNegative
+		if edge.WindCnt != -1 {
+			return false
+		}
+		break
+	}
+
+	switch c.m_ClipType {
+	case ctIntersection:
+		switch pft2 {
+		case pftEvenOdd, pftNonZero:
+			return (edge.WindCnt2 != 0)
+		case pftPositive:
+			return (edge.WindCnt2 > 0)
+		default:
+			return (edge.WindCnt2 < 0)
+		}
+	case ctUnion:
+		switch pft2 {
+		case pftEvenOdd, pftNonZero:
+			return (edge.WindCnt2 == 0)
+		case pftPositive:
+			return (edge.WindCnt2 <= 0)
+		default:
+			return (edge.WindCnt2 >= 0)
+		}
+	case ctDifference:
+		if edge.PolyTyp == ptSubject {
+			switch pft2 {
+			case pftEvenOdd, pftNonZero:
+				return (edge.WindCnt2 == 0)
+			case pftPositive:
+				return (edge.WindCnt2 <= 0)
+			default:
+				return (edge.WindCnt2 >= 0)
+			}
+		} else {
+			switch pft2 {
+			case pftEvenOdd, pftNonZero:
+				return (edge.WindCnt2 != 0)
+			case pftPositive:
+				return (edge.WindCnt2 > 0)
+			default:
+				return (edge.WindCnt2 < 0)
+			}
+		}
+	case ctXor:
+		if edge.WindDelta == 0 { //XOr always contributing unless open
+			switch pft2 {
+			case pftEvenOdd, pftNonZero:
+				return (edge.WindCnt2 == 0)
+			case pftPositive:
+				return (edge.WindCnt2 <= 0)
+			default:
+				return (edge.WindCnt2 >= 0)
+			}
+		} else {
+			return true
+		}
+	}
+	return true
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) SetWindingCount(edge *TEdge) {
+	e := edge.PrevInAEL
+	//find the edge of the same polytype that immediately preceeds 'edge' in AEL
+	for e != nil && ((e.PolyTyp != edge.PolyTyp) || (e.WindDelta == 0)) {
+		e = e.PrevInAEL
+	}
+	if e == nil {
+		if edge.WindDelta == 0 {
+			edge.WindCnt = 1
+		} else {
+			edge.WindCnt = edge.WindDelta
+		}
+		edge.WindCnt2 = 0
+		e = c.m_ActiveEdges //ie get ready to calc WindCnt2
+	} else if edge.WindDelta == 0 && c.m_ClipType != ctUnion {
+		edge.WindCnt = 1
+		edge.WindCnt2 = e.WindCnt2
+		e = e.NextInAEL //ie get ready to calc WindCnt2
+	} else if c.IsEvenOddFillType(edge) {
+		//EvenOdd filling ...
+		if edge.WindDelta == 0 {
+			//are we inside a subj polygon ...
+			Inside := true
+			e2 := e.PrevInAEL
+			for e2 != nil {
+				if e2.PolyTyp == e.PolyTyp && e2.WindDelta != 0 {
+					Inside = !Inside
+				}
+				e2 = e2.PrevInAEL
+			}
+			if Inside {
+				edge.WindCnt = 0
+			} else {
+				edge.WindCnt = 1
+			}
+		} else {
+			edge.WindCnt = edge.WindDelta
+		}
+		edge.WindCnt2 = e.WindCnt2
+		e = e.NextInAEL //ie get ready to calc WindCnt2
+	} else {
+		//nonZero, Positive or Negative filling ...
+		if e.WindCnt*e.WindDelta < 0 {
+			//prev edge is 'decreasing' WindCount (WC) toward zero
+			//so we're outside the previous polygon ...
+			if intAbs(e.WindCnt) > 1 {
+				//outside prev poly but still inside another.
+				//when reversing direction of prev poly use the same WC
+				if e.WindDelta*edge.WindDelta < 0 {
+					edge.WindCnt = e.WindCnt
+					//otherwise continue to 'decrease' WC ...
+				} else {
+					edge.WindCnt = e.WindCnt + edge.WindDelta
+				}
+			} else {
+				//now outside all polys of same polytype so set own WC ...
+				if edge.WindDelta == 0 {
+					edge.WindCnt = 1
+				} else {
+					edge.WindCnt = edge.WindDelta
+				}
+			}
+		} else {
+			//prev edge is 'increasing' WindCount (WC) away from zero
+			//so we're inside the previous polygon ...
+			if edge.WindDelta == 0 {
+				if e.WindCnt < 0 {
+					e.WindCnt = e.WindCnt - 1
+				} else {
+					e.WindCnt = e.WindCnt + 1
+				}
+				//if wind direction is reversing prev then use same WC
+			} else if e.WindDelta*edge.WindDelta < 0 {
+				edge.WindCnt = e.WindCnt
+				//otherwise add to WC ...
+			} else {
+				edge.WindCnt = e.WindCnt + edge.WindDelta
+			}
+		}
+		edge.WindCnt2 = e.WindCnt2
+		e = e.NextInAEL //ie get ready to calc WindCnt2
+	}
+
+	//update WindCnt2 ...
+	if c.IsEvenOddAltFillType(edge) {
+		//EvenOdd filling ...
+		for e != edge {
+			if e.WindDelta != 0 {
+				if edge.WindCnt2 == 0 {
+					edge.WindCnt2 = 1
+				} else {
+					edge.WindCnt2 = 0
+				}
+			}
+			e = e.NextInAEL
+		}
+	} else {
+		//nonZero, Positive or Negative filling ...
+		for e != edge {
+			edge.WindCnt2 += e.WindDelta
+			e = e.NextInAEL
+		}
 	}
 }
 
-func protectRight(val bool) protects {
-	if val {
-		return protectsBoth
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AddEdgeToSEL(edge *TEdge) {
+	//SEL pointers in PEdge are reused to build a list of horizontal edges.
+	//However, we don't need to worry about order with horizontal edge processing.
+	if c.m_SortedEdges == nil {
+		c.m_SortedEdges = edge
+		edge.PrevInSEL = nil
+		edge.NextInSEL = nil
 	} else {
-		return protectsLeft
+		edge.NextInSEL = c.m_SortedEdges
+		edge.PrevInSEL = nil
+		c.m_SortedEdges.PrevInSEL = edge
+		c.m_SortedEdges = edge
 	}
 }
 
-func getDx(pt1, pt2 *Point) float64 {
+//------------------------------------------------------------------------------
+
+func (c *Clipper) CopyAELToSEL() {
+	e := c.m_ActiveEdges
+	c.m_SortedEdges = e
+	for e != nil {
+		e.PrevInSEL = e.PrevInAEL
+		e.NextInSEL = e.NextInAEL
+		e = e.NextInAEL
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) SwapPositionsInAEL(edge1, edge2 *TEdge) {
+	//check that one or other edge hasn't already been removed from AEL ...
+	if edge1.NextInAEL == edge1.PrevInAEL ||
+		edge2.NextInAEL == edge2.PrevInAEL {
+		return
+	}
+
+	if edge1.NextInAEL == edge2 {
+		next := edge2.NextInAEL
+		if next != nil {
+			next.PrevInAEL = edge1
+		}
+		prev := edge1.PrevInAEL
+		if prev != nil {
+			prev.NextInAEL = edge2
+		}
+		edge2.PrevInAEL = prev
+		edge2.NextInAEL = edge1
+		edge1.PrevInAEL = edge2
+		edge1.NextInAEL = next
+	} else if edge2.NextInAEL == edge1 {
+		next := edge1.NextInAEL
+		if next != nil {
+			next.PrevInAEL = edge2
+		}
+		prev := edge2.PrevInAEL
+		if prev != nil {
+			prev.NextInAEL = edge1
+		}
+		edge1.PrevInAEL = prev
+		edge1.NextInAEL = edge2
+		edge2.PrevInAEL = edge1
+		edge2.NextInAEL = next
+	} else {
+		next := edge1.NextInAEL
+		prev := edge1.PrevInAEL
+		edge1.NextInAEL = edge2.NextInAEL
+		if edge1.NextInAEL != nil {
+			edge1.NextInAEL.PrevInAEL = edge1
+		}
+		edge1.PrevInAEL = edge2.PrevInAEL
+		if edge1.PrevInAEL != nil {
+			edge1.PrevInAEL.NextInAEL = edge1
+		}
+		edge2.NextInAEL = next
+		if edge2.NextInAEL != nil {
+			edge2.NextInAEL.PrevInAEL = edge2
+		}
+		edge2.PrevInAEL = prev
+		if edge2.PrevInAEL != nil {
+			edge2.PrevInAEL.NextInAEL = edge2
+		}
+	}
+
+	if edge1.PrevInAEL == nil {
+		c.m_ActiveEdges = edge1
+	} else if edge2.PrevInAEL == nil {
+		c.m_ActiveEdges = edge2
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) SwapPositionsInSEL(edge1, edge2 *TEdge) {
+	if edge1.NextInSEL == nil && edge1.PrevInSEL == nil {
+		return
+	}
+	if edge2.NextInSEL == nil && edge2.PrevInSEL == nil {
+		return
+	}
+
+	if edge1.NextInSEL == edge2 {
+		next := edge2.NextInSEL
+		if next != nil {
+			next.PrevInSEL = edge1
+		}
+		prev := edge1.PrevInSEL
+		if prev != nil {
+			prev.NextInSEL = edge2
+		}
+		edge2.PrevInSEL = prev
+		edge2.NextInSEL = edge1
+		edge1.PrevInSEL = edge2
+		edge1.NextInSEL = next
+	} else if edge2.NextInSEL == edge1 {
+		next := edge1.NextInSEL
+		if next != nil {
+			next.PrevInSEL = edge2
+		}
+		prev := edge2.PrevInSEL
+		if prev != nil {
+			prev.NextInSEL = edge1
+		}
+		edge1.PrevInSEL = prev
+		edge1.NextInSEL = edge2
+		edge2.PrevInSEL = edge1
+		edge2.NextInSEL = next
+	} else {
+		next := edge1.NextInSEL
+		prev := edge1.PrevInSEL
+		edge1.NextInSEL = edge2.NextInSEL
+		if edge1.NextInSEL != nil {
+			edge1.NextInSEL.PrevInSEL = edge1
+		}
+		edge1.PrevInSEL = edge2.PrevInSEL
+		if edge1.PrevInSEL != nil {
+			edge1.PrevInSEL.NextInSEL = edge1
+		}
+		edge2.NextInSEL = next
+		if edge2.NextInSEL != nil {
+			edge2.NextInSEL.PrevInSEL = edge2
+		}
+		edge2.PrevInSEL = prev
+		if edge2.PrevInSEL != nil {
+			edge2.PrevInSEL.NextInSEL = edge2
+		}
+	}
+
+	if edge1.PrevInSEL == nil {
+		c.m_SortedEdges = edge1
+	} else if edge2.PrevInSEL == nil {
+		c.m_SortedEdges = edge2
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AddLocalMaxPoly(e1, e2 *TEdge, pt *IntPoint) {
+	c.AddOutPt(e1, pt)
+	if e2.WindDelta == 0 {
+		c.AddOutPt(e2, pt)
+	}
+	if e1.OutIdx == e2.OutIdx {
+		e1.OutIdx = Unassigned
+		e2.OutIdx = Unassigned
+	} else if e1.OutIdx < e2.OutIdx {
+		c.AppendPolygon(e1, e2)
+	} else {
+		c.AppendPolygon(e2, e1)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AddLocalMinPoly(e1, e2 *TEdge, pt *IntPoint) *OutPt {
+	var result *OutPt
+	var e, prevE *TEdge
+	if c.IsHorizontal(e2) || (e1.Dx > e2.Dx) {
+		result = c.AddOutPt(e1, pt)
+		e2.OutIdx = e1.OutIdx
+		e1.Side = esLeft
+		e2.Side = esRight
+		e = e1
+		if e.PrevInAEL == e2 {
+			prevE = e2.PrevInAEL
+		} else {
+			prevE = e.PrevInAEL
+		}
+	} else {
+		result = c.AddOutPt(e2, pt)
+		e1.OutIdx = e2.OutIdx
+		e1.Side = esRight
+		e2.Side = esLeft
+		e = e2
+		if e.PrevInAEL == e1 {
+			prevE = e1.PrevInAEL
+		} else {
+			prevE = e.PrevInAEL
+		}
+	}
+
+	if prevE != nil && prevE.OutIdx >= 0 &&
+		(c.TopX(prevE, &pt.Y) == c.TopX(e, &pt.Y)) &&
+		c.SlopesEqual(e, prevE, c.m_UseFullRange) &&
+		(e.WindDelta != 0) && (prevE.WindDelta != 0) {
+		outPt := c.AddOutPt(prevE, pt)
+		c.AddJoin(result, outPt, e.Top)
+	}
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) CreateOutRec() *OutRec {
+	result := new(OutRec)
+	result.Idx = Unassigned
+	result.IsHole = false
+	result.IsOpen = false
+	result.FirstLeft = nil
+	result.Pts = nil
+	result.BottomPt = nil
+	result.PolyNode = nil
+	c.m_PolyOuts = append(c.m_PolyOuts, result)
+	result.Idx = len(c.m_PolyOuts) - 1
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
+	ToFront := (e.Side == esLeft)
+	if e.OutIdx < 0 {
+		outRec := c.CreateOutRec()
+		outRec.IsOpen = (e.WindDelta == 0)
+		newOp := new(OutPt)
+		outRec.Pts = newOp
+		newOp.Idx = outRec.Idx
+		newOp.Pt = pt
+		newOp.Next = newOp
+		newOp.Prev = newOp
+		if !outRec.IsOpen {
+			c.SetHoleState(e, outRec)
+		}
+		e.OutIdx = outRec.Idx //nb: do this after SetZ !
+		return newOp
+	} else {
+		outRec := c.m_PolyOuts[e.OutIdx]
+		//OutRec.Pts is the 'Left-most' point & OutRec.Pts.Prev is the 'Right-most'
+		op := outRec.Pts
+		if ToFront && pt == op.Pt {
+			return op
+		} else if !ToFront && pt == op.Prev.Pt {
+			return op.Prev
+		}
+
+		newOp := new(OutPt)
+		newOp.Idx = outRec.Idx
+		newOp.Pt = pt
+		newOp.Next = op
+		newOp.Prev = op.Prev
+		newOp.Prev.Next = newOp
+		op.Prev = newOp
+		if ToFront {
+			outRec.Pts = newOp
+		}
+		return newOp
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) SwapPoints(pt1, pt2 *IntPoint) {
+	tmp := pt1.Copy()
+	pt1 = pt2
+	pt2 = tmp
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) HorzSegmentsOverlap(seg1a, seg1b, seg2a, seg2b cInt) bool {
+	if seg1a > seg1b {
+		c.Swap(&seg1a, &seg1b)
+	}
+	if seg2a > seg2b {
+		c.Swap(&seg2a, &seg2b)
+	}
+	return (seg1a < seg2b) && (seg2a < seg1b)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) SetHoleState(e *TEdge, outRec *OutRec) {
+	isHole := false
+	e2 := e.PrevInAEL
+	for e2 != nil {
+		if e2.OutIdx >= 0 && e2.WindDelta != 0 {
+			isHole = !isHole
+			if outRec.FirstLeft == nil {
+				outRec.FirstLeft = c.m_PolyOuts[e2.OutIdx]
+			}
+		}
+		e2 = e2.PrevInAEL
+	}
+	if isHole {
+		outRec.IsHole = true
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetDx(pt1, pt2 *IntPoint) float64 {
 	if pt1.Y == pt2.Y {
 		return horizontal
 	} else {
@@ -759,159 +2089,226 @@ func getDx(pt1, pt2 *Point) float64 {
 	}
 }
 
-func param1RightOfParam2(outRec1, outRec2 *outRec) bool {
-	for outRec1 != nil {
-		outRec1 = outRec1.FirstLeft
-		if outRec1 == outRec2 {
-			return true
-		}
-	}
-	return false
-}
+//---------------------------------------------------------------------------
 
-func firstParamIsbottomPt(btmPt1, btmPt2 *outPt) bool {
-	p := btmPt1.prevOp
-	for pointsEqual(p.pt, btmPt1.pt) && (p != btmPt1) {
-		p = p.prevOp
+func (c *Clipper) FirstIsBottomPt(btmPt1, btmPt2 *OutPt) bool {
+	p := btmPt1.Prev
+	for (p.Pt == btmPt1.Pt) && (p != btmPt1) {
+		p = p.Prev
 	}
-	dx1p := math.Abs(getDx(btmPt1.pt, p.pt))
-	p = btmPt1.nextOp
-	for pointsEqual(p.pt, btmPt1.pt) && (p != btmPt1) {
-		p = p.nextOp
+	dx1p := math.Abs(c.GetDx(btmPt1.Pt, p.Pt))
+	p = btmPt1.Next
+	for (p.Pt == btmPt1.Pt) && (p != btmPt1) {
+		p = p.Next
 	}
-	dx1n := math.Abs(getDx(btmPt1.pt, p.pt))
+	dx1n := math.Abs(c.GetDx(btmPt1.Pt, p.Pt))
 
-	p = btmPt2.prevOp
-	for pointsEqual(p.pt, btmPt2.pt) && (p != btmPt2) {
-		p = p.prevOp
+	p = btmPt2.Prev
+	for (p.Pt == btmPt2.Pt) && (p != btmPt2) {
+		p = p.Prev
 	}
-	dx2p := math.Abs(getDx(btmPt2.pt, p.pt))
-	p = btmPt2.nextOp
-	for pointsEqual(p.pt, btmPt2.pt) && (p != btmPt2) {
-		p = p.nextOp
+	dx2p := math.Abs(c.GetDx(btmPt2.Pt, p.Pt))
+	p = btmPt2.Next
+	for (p.Pt == btmPt2.Pt) && (p != btmPt2) {
+		p = p.Next
 	}
-	dx2n := math.Abs(getDx(btmPt2.pt, p.pt))
+	dx2n := math.Abs(c.GetDx(btmPt2.Pt, p.Pt))
 	return (dx1p >= dx2p && dx1p >= dx2n) || (dx1n >= dx2p && dx1n >= dx2n)
 }
 
-func getBottomPt(pp *outPt) *outPt {
-	var dups *outPt
-	p := pp.nextOp
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetBottomPt(pp *OutPt) *OutPt {
+	var dups *OutPt
+	p := pp.Next
 	for p != pp {
-		if p.pt.Y > pp.pt.Y {
+		if p.Pt.Y > pp.Pt.Y {
 			pp = p
 			dups = nil
-		} else if p.pt.Y == pp.pt.Y && p.pt.X <= pp.pt.X {
-			if p.pt.X < pp.pt.X {
+		} else if p.Pt.Y == pp.Pt.Y && p.Pt.X <= pp.Pt.X {
+			if p.Pt.X < pp.Pt.X {
 				dups = nil
 				pp = p
 			} else {
-				if p.nextOp != pp && p.prevOp != pp {
+				if p.Next != pp && p.Prev != pp {
 					dups = p
 				}
 			}
 		}
-		p = p.nextOp
+		p = p.Next
 	}
 	if dups != nil {
+		//there appears to be at least 2 vertices at bottomPt so ...
 		for dups != p {
-			if !firstParamIsbottomPt(p, dups) {
+			if !c.FirstIsBottomPt(p, dups) {
 				pp = dups
 			}
-			dups = dups.nextOp
-			for !pointsEqual(dups.pt, pp.pt) {
-				dups = dups.nextOp
+			dups = dups.Next
+			for dups.Pt != pp.Pt {
+				dups = dups.Next
 			}
 		}
 	}
 	return pp
 }
 
-func getLowermostRec(outRec1, outRec2 *outRec) *outRec {
-	var outPt1, outPt2 *outPt
-	if outRec1.bottomPt == nil {
-		outPt1 = getBottomPt(outRec1.pts)
-	} else {
-		outPt1 = outRec1.bottomPt
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetLowermostRec(outRec1, outRec2 *OutRec) *OutRec {
+	//work out which polygon fragment has the correct hole state ...
+	if outRec1.BottomPt == nil {
+		outRec1.BottomPt = c.GetBottomPt(outRec1.Pts)
 	}
-	if outRec2.bottomPt == nil {
-		outPt2 = getBottomPt(outRec2.pts)
-	} else {
-		outPt2 = outRec2.bottomPt
+	if outRec2.BottomPt == nil {
+		outRec2.BottomPt = c.GetBottomPt(outRec2.Pts)
 	}
-	if outPt1.pt.Y > outPt2.pt.Y {
+	bPt1 := outRec1.BottomPt
+	bPt2 := outRec2.BottomPt
+	if bPt1.Pt.Y > bPt2.Pt.Y {
 		return outRec1
-	} else if outPt1.pt.Y < outPt2.pt.Y {
+	} else if bPt1.Pt.Y < bPt2.Pt.Y {
 		return outRec2
-	} else if outPt1.pt.X < outPt2.pt.X {
+	} else if bPt1.Pt.X < bPt2.Pt.X {
 		return outRec1
-	} else if outPt1.pt.X > outPt2.pt.X {
+	} else if bPt1.Pt.X > bPt2.Pt.X {
 		return outRec2
-	} else if outPt1.nextOp == outPt1 {
+	} else if bPt1.Next == bPt1 {
 		return outRec2
-	} else if outPt2.nextOp == outPt2 {
+	} else if bPt2.Next == bPt2 {
 		return outRec1
-	} else if firstParamIsbottomPt(outPt1, outPt2) {
+	} else if c.FirstIsBottomPt(bPt1, bPt2) {
 		return outRec1
 	} else {
 		return outRec2
 	}
 }
 
-func setHoleState(e *edge, outRec *outRec, polyOutList []*outRec) {
-	isHole := false
-	e2 := e.prevInAEL
-	for e2 != nil {
-		if e2.outIdx >= 0 {
-			isHole = !isHole
-			if outRec.FirstLeft == nil {
-				outRec.FirstLeft = polyOutList[e2.outIdx]
-			}
-		}
-		e2 = e2.prevInAEL
-	}
-	outRec.isHole = isHole
-}
+//------------------------------------------------------------------------------
 
-func pointCount(pts *outPt) int {
-	if pts == nil {
-		return 0
-	}
-	p := pts
-	result := 0
+func (c *Clipper) Param1RightOfParam2(outRec1, outRec2 *OutRec) bool {
 	for {
-		result++
-		p = p.nextOp
-		if p == pts {
-			break
-		}
-	}
-	return result
-}
-
-func pointIsVertex(pt *Point, outPts *outPt) bool {
-	op := outPts
-	for {
-		if pointsEqual(op.pt, pt) {
+		outRec1 = outRec1.FirstLeft
+		if outRec1 == outRec2 {
 			return true
 		}
-		op = op.nextOp
-		if op == outPts {
+		if outRec1 == nil {
 			break
 		}
 	}
 	return false
 }
 
-func reversePolyPtLinks(pp *outPt) {
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetOutRec(idx int) *OutRec {
+	outrec := c.m_PolyOuts[idx]
+	for outrec != c.m_PolyOuts[outrec.Idx] {
+		outrec = c.m_PolyOuts[outrec.Idx]
+	}
+	return outrec
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AppendPolygon(e1, e2 *TEdge) {
+	//get the start and ends of both output polygons ...
+	outRec1 := c.m_PolyOuts[e1.OutIdx]
+	outRec2 := c.m_PolyOuts[e2.OutIdx]
+
+	var holeStateRec *OutRec
+	if c.Param1RightOfParam2(outRec1, outRec2) {
+		holeStateRec = outRec2
+	} else if c.Param1RightOfParam2(outRec2, outRec1) {
+		holeStateRec = outRec1
+	} else {
+		holeStateRec = c.GetLowermostRec(outRec1, outRec2)
+	}
+
+	p1_lft := outRec1.Pts
+	p1_rt := p1_lft.Prev
+	p2_lft := outRec2.Pts
+	p2_rt := p2_lft.Prev
+
+	var side EdgeSide
+	//join e2 poly onto e1 poly and delete pointers to e2 ...
+	if e1.Side == esLeft {
+		if e2.Side == esLeft {
+			//z y x a b c
+			c.ReversePolyPtLinks(p2_lft)
+			p2_lft.Next = p1_lft
+			p1_lft.Prev = p2_lft
+			p1_rt.Next = p2_rt
+			p2_rt.Prev = p1_rt
+			outRec1.Pts = p2_rt
+		} else {
+			//x y z a b c
+			p2_rt.Next = p1_lft
+			p1_lft.Prev = p2_rt
+			p2_lft.Prev = p1_rt
+			p1_rt.Next = p2_lft
+			outRec1.Pts = p2_lft
+		}
+		side = esLeft
+	} else {
+		if e2.Side == esRight {
+			//a b c z y x
+			c.ReversePolyPtLinks(p2_lft)
+			p1_rt.Next = p2_rt
+			p2_rt.Prev = p1_rt
+			p2_lft.Next = p1_lft
+			p1_lft.Prev = p2_lft
+		} else {
+			//a b c x y z
+			p1_rt.Next = p2_lft
+			p2_lft.Prev = p1_rt
+			p1_lft.Prev = p2_rt
+			p2_rt.Next = p1_lft
+		}
+		side = esRight
+	}
+
+	outRec1.BottomPt = nil
+	if holeStateRec == outRec2 {
+		if outRec2.FirstLeft != outRec1 {
+			outRec1.FirstLeft = outRec2.FirstLeft
+		}
+		outRec1.IsHole = outRec2.IsHole
+	}
+	outRec2.Pts = nil
+	outRec2.BottomPt = nil
+
+	outRec2.FirstLeft = outRec1
+
+	OKIdx := e1.OutIdx
+	ObsoleteIdx := e2.OutIdx
+
+	e1.OutIdx = Unassigned //nb: safe because we only get here via AddLocalMaxPoly
+	e2.OutIdx = Unassigned
+
+	e := c.m_ActiveEdges
+	for e != nil {
+		if e.OutIdx == ObsoleteIdx {
+			e.OutIdx = OKIdx
+			e.Side = side
+			break
+		}
+		e = e.NextInAEL
+	}
+	outRec2.Idx = outRec1.Idx
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ReversePolyPtLinks(pp *OutPt) {
 	if pp == nil {
 		return
 	}
-	pp1 := pp
+	var pp1, pp2 *OutPt
+	pp1 = pp
 	for {
-		pp2 := pp1.nextOp
-		pp1.nextOp = pp1.prevOp
-		pp1.prevOp = pp2
+		pp2 = pp1.Next
+		pp1.Next = pp1.Prev
+		pp1.Prev = pp2
 		pp1 = pp2
 		if pp1 == pp {
 			break
@@ -919,2045 +2316,2247 @@ func reversePolyPtLinks(pp *outPt) {
 	}
 }
 
-func fixupOutPolygon(outRec *outRec) {
-	var lastOK *outPt
-	outRec.bottomPt = nil
-	pp := outRec.pts
+//------------------------------------------------------------------------------
+
+func (c *Clipper) SwapSides(edge1, edge2 *TEdge) {
+	side := edge1.Side
+	edge1.Side = edge2.Side
+	edge2.Side = side
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) SwapPolyIndexes(edge1, edge2 *TEdge) {
+	outIdx := edge1.OutIdx
+	edge1.OutIdx = edge2.OutIdx
+	edge2.OutIdx = outIdx
+}
+
+//------------------------------------------------------------------------------
+
+// default protect=false
+func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
+	//e1 will be to the left of e2 BELOW the intersection. Therefore e1 is before
+	//e2 in AEL except when e1 is being inserted at the intersection point ...
+
+	e1stops := !protect && e1.NextInLML == nil &&
+		e1.Top.X == pt.X && e1.Top.Y == pt.Y
+	e2stops := !protect && e2.NextInLML == nil &&
+		e2.Top.X == pt.X && e2.Top.Y == pt.Y
+	e1Contributing := (e1.OutIdx >= 0)
+	e2Contributing := (e2.OutIdx >= 0)
+
+	c.SetZ(pt, e1, e2)
+
+	//#if use_lines
+	//if either edge is on an OPEN path ...
+	if e1.WindDelta == 0 || e2.WindDelta == 0 {
+		//ignore subject-subject open path intersections UNLESS they
+		//are both open paths, AND they are both 'contributing maximas' ...
+		if e1.WindDelta == 0 && e2.WindDelta == 0 {
+			if (e1stops || e2stops) && e1Contributing && e2Contributing {
+				c.AddLocalMaxPoly(e1, e2, pt)
+			}
+			//if intersecting a subj line with a subj poly ...
+		} else if e1.PolyTyp == e2.PolyTyp &&
+			e1.WindDelta != e2.WindDelta && c.m_ClipType == ctUnion {
+			if e1.WindDelta == 0 {
+				if e2Contributing {
+					c.AddOutPt(e1, pt)
+					if e1Contributing {
+						e1.OutIdx = Unassigned
+					}
+				}
+			} else {
+				if e1Contributing {
+					c.AddOutPt(e2, pt)
+					if e2Contributing {
+						e2.OutIdx = Unassigned
+					}
+				}
+			}
+		} else if e1.PolyTyp != e2.PolyTyp {
+			if (e1.WindDelta == 0) && intAbs(e2.WindCnt) == 1 &&
+				(c.m_ClipType != ctUnion || e2.WindCnt2 == 0) {
+				c.AddOutPt(e1, pt)
+				if e1Contributing {
+					e1.OutIdx = Unassigned
+				}
+			} else if (e2.WindDelta == 0) && (intAbs(e1.WindCnt) == 1) &&
+				(c.m_ClipType != ctUnion || e1.WindCnt2 == 0) {
+				c.AddOutPt(e2, pt)
+				if e2Contributing {
+					e2.OutIdx = Unassigned
+				}
+			}
+		}
+
+		if e1stops {
+			if e1.OutIdx < 0 {
+				c.DeleteFromAEL(e1)
+			} else {
+				panic(NewClipperException("Error intersecting polylines"))
+			}
+		}
+		if e2stops {
+			if e2.OutIdx < 0 {
+				c.DeleteFromAEL(e2)
+			} else {
+				panic(NewClipperException("Error intersecting polylines"))
+			}
+		}
+		return
+	}
+	//#endif
+
+	//update winding counts...
+	//assumes that e1 will be to the Right of e2 ABOVE the intersection
+	if e1.PolyTyp == e2.PolyTyp {
+		if c.IsEvenOddFillType(e1) {
+			oldE1WindCnt := e1.WindCnt
+			e1.WindCnt = e2.WindCnt
+			e2.WindCnt = oldE1WindCnt
+		} else {
+			if e1.WindCnt+e2.WindDelta == 0 {
+				e1.WindCnt = -e1.WindCnt
+			} else {
+				e1.WindCnt += e2.WindDelta
+			}
+			if e2.WindCnt-e1.WindDelta == 0 {
+				e2.WindCnt = -e2.WindCnt
+			} else {
+				e2.WindCnt -= e1.WindDelta
+			}
+		}
+	} else {
+		if !c.IsEvenOddFillType(e2) {
+			e1.WindCnt2 += e2.WindDelta
+		} else {
+			if e1.WindCnt2 == 0 {
+				e1.WindCnt2 = 1
+			} else {
+				e1.WindCnt2 = 0
+			}
+		}
+		if !c.IsEvenOddFillType(e1) {
+			e2.WindCnt2 -= e1.WindDelta
+		} else {
+			if e2.WindCnt2 == 0 {
+				e2.WindCnt2 = 1
+			} else {
+				e2.WindCnt2 = 0
+			}
+		}
+	}
+
+	var e1FillType, e2FillType, e1FillType2, e2FillType2 PolyFillType
+	if e1.PolyTyp == ptSubject {
+		e1FillType = c.m_SubjFillType
+		e1FillType2 = c.m_ClipFillType
+	} else {
+		e1FillType = c.m_ClipFillType
+		e1FillType2 = c.m_SubjFillType
+	}
+	if e2.PolyTyp == ptSubject {
+		e2FillType = c.m_SubjFillType
+		e2FillType2 = c.m_ClipFillType
+	} else {
+		e2FillType = c.m_ClipFillType
+		e2FillType2 = c.m_SubjFillType
+	}
+
+	var e1Wc, e2Wc int
+	switch e1FillType {
+	case pftPositive:
+		e1Wc = e1.WindCnt
+		break
+	case pftNegative:
+		e1Wc = -e1.WindCnt
+		break
+	default:
+		e1Wc = intAbs(e1.WindCnt)
+		break
+	}
+	switch e2FillType {
+	case pftPositive:
+		e2Wc = e2.WindCnt
+		break
+	case pftNegative:
+		e2Wc = -e2.WindCnt
+		break
+	default:
+		e2Wc = intAbs(e2.WindCnt)
+		break
+	}
+
+	if e1Contributing && e2Contributing {
+		if e1stops || e2stops ||
+			(e1Wc != 0 && e1Wc != 1) || (e2Wc != 0 && e2Wc != 1) ||
+			(e1.PolyTyp != e2.PolyTyp && c.m_ClipType != ctXor) {
+			c.AddLocalMaxPoly(e1, e2, pt)
+		} else {
+			c.AddOutPt(e1, pt)
+			c.AddOutPt(e2, pt)
+			c.SwapSides(e1, e2)
+			c.SwapPolyIndexes(e1, e2)
+		}
+	} else if e1Contributing {
+		if e2Wc == 0 || e2Wc == 1 {
+			c.AddOutPt(e1, pt)
+			c.SwapSides(e1, e2)
+			c.SwapPolyIndexes(e1, e2)
+		}
+
+	} else if e2Contributing {
+		if e1Wc == 0 || e1Wc == 1 {
+			c.AddOutPt(e2, pt)
+			c.SwapSides(e1, e2)
+			c.SwapPolyIndexes(e1, e2)
+		}
+	} else if (e1Wc == 0 || e1Wc == 1) &&
+		(e2Wc == 0 || e2Wc == 1) && !e1stops && !e2stops {
+		//neither edge is currently contributing ...
+		var e1Wc2, e2Wc2 int
+		switch e1FillType2 {
+		case pftPositive:
+			e1Wc2 = e1.WindCnt2
+			break
+		case pftNegative:
+			e1Wc2 = -e1.WindCnt2
+			break
+		default:
+			e1Wc2 = intAbs(e1.WindCnt2)
+			break
+		}
+		switch e2FillType2 {
+		case pftPositive:
+			e2Wc2 = e2.WindCnt2
+			break
+		case pftNegative:
+			e2Wc2 = -e2.WindCnt2
+			break
+		default:
+			e2Wc2 = intAbs(e2.WindCnt2)
+			break
+		}
+
+		if e1.PolyTyp != e2.PolyTyp {
+			c.AddLocalMinPoly(e1, e2, pt)
+		} else if e1Wc == 1 && e2Wc == 1 {
+			switch c.m_ClipType {
+			case ctIntersection:
+				if e1Wc2 > 0 && e2Wc2 > 0 {
+					c.AddLocalMinPoly(e1, e2, pt)
+					break
+				}
+			case ctUnion:
+				if e1Wc2 <= 0 && e2Wc2 <= 0 {
+					c.AddLocalMinPoly(e1, e2, pt)
+					break
+				}
+			case ctDifference:
+				if ((e1.PolyTyp == ptClip) && (e1Wc2 > 0) && (e2Wc2 > 0)) ||
+					((e1.PolyTyp == ptSubject) && (e1Wc2 <= 0) && (e2Wc2 <= 0)) {
+					c.AddLocalMinPoly(e1, e2, pt)
+					break
+				}
+			case ctXor:
+				c.AddLocalMinPoly(e1, e2, pt)
+				break
+			}
+		} else {
+			c.SwapSides(e1, e2)
+		}
+	}
+
+	if (e1stops != e2stops) &&
+		((e1stops && (e1.OutIdx >= 0)) || (e2stops && (e2.OutIdx >= 0))) {
+		c.SwapSides(e1, e2)
+		c.SwapPolyIndexes(e1, e2)
+	}
+
+	//finally, delete any non-contributing maxima edges  ...
+	if e1stops {
+		c.DeleteFromAEL(e1)
+	}
+	if e2stops {
+		c.DeleteFromAEL(e2)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DeleteFromAEL(e *TEdge) {
+	AelPrev := e.PrevInAEL
+	AelNext := e.NextInAEL
+	if AelPrev == nil && AelNext == nil && (e != c.m_ActiveEdges) {
+		return //already deleted
+	}
+	if AelPrev != nil {
+		AelPrev.NextInAEL = AelNext
+	} else {
+		c.m_ActiveEdges = AelNext
+	}
+	if AelNext != nil {
+		AelNext.PrevInAEL = AelPrev
+	}
+	e.NextInAEL = nil
+	e.PrevInAEL = nil
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DeleteFromSEL(e *TEdge) {
+	SelPrev := e.PrevInSEL
+	SelNext := e.NextInSEL
+	if SelPrev == nil && SelNext == nil && (e != c.m_SortedEdges) {
+		return //already deleted
+	}
+	if SelPrev != nil {
+		SelPrev.NextInSEL = SelNext
+	} else {
+		c.m_SortedEdges = SelNext
+	}
+	if SelNext != nil {
+		SelNext.PrevInSEL = SelPrev
+	}
+	e.NextInSEL = nil
+	e.PrevInSEL = nil
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) UpdateEdgeIntoAEL(e *TEdge) {
+	if e.NextInLML == nil {
+		panic(NewClipperException("UpdateEdgeIntoAEL: invalid call"))
+	}
+	AelPrev := e.PrevInAEL
+	AelNext := e.NextInAEL
+	e.NextInLML.OutIdx = e.OutIdx
+	if AelPrev != nil {
+		AelPrev.NextInAEL = e.NextInLML
+	} else {
+		c.m_ActiveEdges = e.NextInLML
+	}
+	if AelNext != nil {
+		AelNext.PrevInAEL = e.NextInLML
+	}
+	e.NextInLML.Side = e.Side
+	e.NextInLML.WindDelta = e.WindDelta
+	e.NextInLML.WindCnt = e.WindCnt
+	e.NextInLML.WindCnt2 = e.WindCnt2
+	e = e.NextInLML
+	e.Curr = e.Bot
+	e.PrevInAEL = AelPrev
+	e.NextInAEL = AelNext
+	if !c.IsHorizontal(e) {
+		c.InsertScanbeam(e.Top.Y)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ProcessHorizontals(isTopOfScanbeam bool) {
+	horzEdge := c.m_SortedEdges
+	for horzEdge != nil {
+		c.DeleteFromSEL(horzEdge)
+		c.ProcessHorizontal(horzEdge, isTopOfScanbeam)
+		horzEdge = c.m_SortedEdges
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetHorzDirection(HorzEdge *TEdge, Dir *Direction, Left, Right *cInt) {
+	if HorzEdge.Bot.X < HorzEdge.Top.X {
+		*Left = HorzEdge.Bot.X
+		*Right = HorzEdge.Top.X
+		*Dir = dLeftToRight
+	} else {
+		*Left = HorzEdge.Top.X
+		*Right = HorzEdge.Bot.X
+		*Dir = dRightToLeft
+	}
+}
+
+//------------------------------------------------------------------------
+
+func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
+	var dir Direction
+	var horzLeft, horzRight cInt
+
+	c.GetHorzDirection(horzEdge, &dir, &horzLeft, &horzRight)
+
+	eLastHorz := horzEdge
+	var eMaxPair *TEdge
+	for eLastHorz.NextInLML != nil && c.IsHorizontal(eLastHorz.NextInLML) {
+		eLastHorz = eLastHorz.NextInLML
+	}
+	if eLastHorz.NextInLML == nil {
+		eMaxPair = c.GetMaximaPair(eLastHorz)
+	}
+
 	for {
-		if pp.prevOp == pp || pp.nextOp == pp.prevOp {
-			outRec.pts = nil
+		IsLastHorz := (horzEdge == eLastHorz)
+		e := c.GetNextInAEL(horzEdge, dir)
+		for e != nil {
+			//Break if we've got to the end of an intermediate horizontal edge ...
+			//nb: Smaller Dx's are to the right of larger Dx's ABOVE the horizontal.
+			if e.Curr.X == horzEdge.Top.X && horzEdge.NextInLML != nil &&
+				e.Dx < horzEdge.NextInLML.Dx {
+				break
+			}
+
+			eNext := c.GetNextInAEL(e, dir) //saves eNext for later
+
+			if (dir == dLeftToRight && e.Curr.X <= horzRight) ||
+				(dir == dRightToLeft && e.Curr.X >= horzLeft) {
+				//so far we're still in range of the horizontal Edge  but make sure
+				//we're at the last of consec. horizontals when matching with eMaxPair
+				if e == eMaxPair && IsLastHorz {
+					if horzEdge.OutIdx >= 0 {
+						op1 := c.AddOutPt(horzEdge, horzEdge.Top)
+						eNextHorz := c.m_SortedEdges
+						for eNextHorz != nil {
+							if eNextHorz.OutIdx >= 0 &&
+								c.HorzSegmentsOverlap(horzEdge.Bot.X,
+									horzEdge.Top.X, eNextHorz.Bot.X, eNextHorz.Top.X) {
+								op2 := c.AddOutPt(eNextHorz, eNextHorz.Bot)
+								c.AddJoin(op2, op1, eNextHorz.Top)
+							}
+							eNextHorz = eNextHorz.NextInSEL
+						}
+						c.AddGhostJoin(op1, horzEdge.Bot)
+						c.AddLocalMaxPoly(horzEdge, eMaxPair, horzEdge.Top)
+					}
+					c.DeleteFromAEL(horzEdge)
+					c.DeleteFromAEL(eMaxPair)
+					return
+				} else if dir == dLeftToRight {
+					Pt := &IntPoint{e.Curr.X, horzEdge.Curr.Y}
+					c.IntersectEdges(horzEdge, e, Pt, true)
+				} else {
+					Pt := &IntPoint{e.Curr.X, horzEdge.Curr.Y}
+					c.IntersectEdges(e, horzEdge, Pt, true)
+				}
+				c.SwapPositionsInAEL(horzEdge, e)
+			} else if (dir == dLeftToRight && e.Curr.X >= horzRight) ||
+				(dir == dRightToLeft && e.Curr.X <= horzLeft) {
+				break
+			}
+			e = eNext
+		}
+
+		if horzEdge.NextInLML != nil && c.IsHorizontal(horzEdge.NextInLML) {
+			c.UpdateEdgeIntoAEL(horzEdge)
+			if horzEdge.OutIdx >= 0 {
+				c.AddOutPt(horzEdge, horzEdge.Bot)
+			}
+			c.GetHorzDirection(horzEdge, &dir, &horzLeft, &horzRight)
+		} else {
+			break
+		}
+	}
+
+	if horzEdge.NextInLML != nil {
+		if horzEdge.OutIdx >= 0 {
+			op1 := c.AddOutPt(horzEdge, horzEdge.Top)
+			if isTopOfScanbeam {
+				c.AddGhostJoin(op1, horzEdge.Bot)
+			}
+
+			c.UpdateEdgeIntoAEL(horzEdge)
+			if horzEdge.WindDelta == 0 {
+				return
+			}
+			//nb: HorzEdge is no longer horizontal here
+			ePrev := horzEdge.PrevInAEL
+			eNext := horzEdge.NextInAEL
+			if ePrev != nil && ePrev.Curr.X == horzEdge.Bot.X &&
+				ePrev.Curr.Y == horzEdge.Bot.Y && ePrev.WindDelta != 0 &&
+				(ePrev.OutIdx >= 0 && ePrev.Curr.Y > ePrev.Top.Y &&
+					c.SlopesEqual(horzEdge, ePrev, c.m_UseFullRange)) {
+				op2 := c.AddOutPt(ePrev, horzEdge.Bot)
+				c.AddJoin(op1, op2, horzEdge.Top)
+			} else if eNext != nil && eNext.Curr.X == horzEdge.Bot.X &&
+				eNext.Curr.Y == horzEdge.Bot.Y && eNext.WindDelta != 0 &&
+				eNext.OutIdx >= 0 && eNext.Curr.Y > eNext.Top.Y &&
+				c.SlopesEqual(horzEdge, eNext, c.m_UseFullRange) {
+				op2 := c.AddOutPt(eNext, horzEdge.Bot)
+				c.AddJoin(op1, op2, horzEdge.Top)
+			}
+		} else {
+			c.UpdateEdgeIntoAEL(horzEdge)
+		}
+	} else {
+		if horzEdge.OutIdx >= 0 {
+			c.AddOutPt(horzEdge, horzEdge.Top)
+		}
+		c.DeleteFromAEL(horzEdge)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetNextInAEL(e *TEdge, direction Direction) *TEdge {
+	if direction == dLeftToRight {
+		return e.NextInAEL
+	} else {
+		return e.PrevInAEL
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) IsMinima(e *TEdge) bool {
+	return e != nil && (e.Prev.NextInLML != e) && (e.Next.NextInLML != e)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) IsMaxima(e *TEdge, Y cInt) bool {
+	return (e != nil && e.Top.Y == Y && e.NextInLML == nil)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) IsIntermediate(e *TEdge, Y cInt) bool {
+	return (e.Top.Y == Y && e.NextInLML != nil)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetMaximaPair(e *TEdge) *TEdge {
+	var result *TEdge
+	if (e.Next.Top == e.Top) && e.Next.NextInLML == nil {
+		result = e.Next
+	} else if (e.Prev.Top == e.Top) && e.Prev.NextInLML == nil {
+		result = e.Prev
+	}
+	if result != nil && (result.OutIdx == Skip ||
+		(result.NextInAEL == result.PrevInAEL && !c.IsHorizontal(result))) {
+		return nil
+	}
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ProcessIntersections(botY, topY cInt) bool {
+	if c.m_ActiveEdges == nil {
+		return true
+	}
+	//	defer func() {
+	//		if r := recover(); r != nil {
+	//			c.m_SortedEdges = nil
+	//			c.m_IntersectList = make([]*IntersectNode, 0)
+	//			panic(NewClipperException("ProcessIntersections error: " +
+	//				r.(error).Error()))
+	//		}
+	//	}()
+	c.BuildIntersectList(botY, topY)
+	fmt.Println("IntersectList", c.m_IntersectList)
+	if len(c.m_IntersectList) == 0 {
+		return true
+	}
+	if len(c.m_IntersectList) == 1 || c.FixupIntersectionOrder() {
+		c.ProcessIntersectList()
+	} else {
+		return false
+	}
+
+	c.m_SortedEdges = nil
+	return true
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) BuildIntersectList(botY, topY cInt) {
+	if c.m_ActiveEdges == nil {
+		return
+	}
+
+	//prepare for sorting ...
+	e := c.m_ActiveEdges
+	c.m_SortedEdges = e
+	for e != nil {
+		e.PrevInSEL = e.PrevInAEL
+		e.NextInSEL = e.NextInAEL
+		e.Curr.X = c.TopX(e, &topY)
+		e = e.NextInAEL
+	}
+
+	//bubblesort ...
+	isModified := true
+	for isModified && c.m_SortedEdges != nil {
+		isModified = false
+		e = c.m_SortedEdges
+		for e.NextInSEL != nil {
+			eNext := e.NextInSEL
+			if e.Curr.X > eNext.Curr.X {
+				newNode := new(IntersectNode)
+				newNode.Edge1 = e
+				newNode.Edge2 = eNext
+				newNode.Pt = c.IntersectPoint(e, eNext)
+				c.m_IntersectList = append(c.m_IntersectList, newNode)
+
+				c.SwapPositionsInSEL(e, eNext)
+				isModified = true
+			} else {
+				e = eNext
+			}
+		}
+		if e.PrevInSEL != nil {
+			e.PrevInSEL.NextInSEL = nil
+		} else {
+			break
+		}
+	}
+	c.m_SortedEdges = nil
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) EdgesAdjacent(inode *IntersectNode) bool {
+	return (inode.Edge1.NextInSEL == inode.Edge2) ||
+		(inode.Edge1.PrevInSEL == inode.Edge2)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) IntersectNodeSort(node1, node2 *IntersectNode) int {
+	//the following typecast is safe because the differences in Pt.Y will
+	//be limited to the height of the scanbeam.
+	return int(node2.Pt.Y - node1.Pt.Y)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) FixupIntersectionOrder() bool {
+	//pre-condition: intersections are sorted bottom-most first.
+	//Now it's crucial that intersections are made only between adjacent edges,
+	//so to ensure this the order of intersections may need adjusting ...
+	sort.Sort(IntersectNodeList(c.m_IntersectList))
+
+	c.CopyAELToSEL()
+	cnt := len(c.m_IntersectList)
+	for i := 0; i < cnt; i++ {
+		if !c.EdgesAdjacent(c.m_IntersectList[i]) {
+			j := i + 1
+			for j < cnt && !c.EdgesAdjacent(c.m_IntersectList[j]) {
+				j++
+			}
+			if j == cnt {
+				return false
+			}
+
+			tmp := c.m_IntersectList[i]
+			c.m_IntersectList[i] = c.m_IntersectList[j]
+			c.m_IntersectList[j] = tmp
+
+		}
+		c.SwapPositionsInSEL(c.m_IntersectList[i].Edge1, c.m_IntersectList[i].Edge2)
+	}
+	return true
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ProcessIntersectList() {
+	for i := 0; i < len(c.m_IntersectList); i++ {
+		iNode := c.m_IntersectList[i]
+		{
+			c.IntersectEdges(iNode.Edge1, iNode.Edge2, iNode.Pt, true)
+			c.SwapPositionsInAEL(iNode.Edge1, iNode.Edge2)
+		}
+	}
+	c.m_IntersectList = make([]*IntersectNode, 0)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) Round(value float64) cInt {
+	if value < 0 {
+		return cInt(value - 0.5)
+	} else {
+		return cInt(value + 0.5)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) TopX(edge *TEdge, currentY *cInt) cInt {
+	if *currentY == edge.Top.Y {
+		return edge.Top.X
+	}
+	return edge.Bot.X + c.Round(edge.Dx*float64(*currentY-edge.Bot.Y))
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) IntersectPoint(edge1, edge2 *TEdge) (ip *IntPoint) {
+	ip = new(IntPoint)
+	var b1, b2 float64
+	//nb: with very large coordinate values, it's possible for SlopesEqual() to
+	//return false but for the edge.Dx value be equal due to float64 precision rounding.
+	if edge1.Dx == edge2.Dx {
+		ip.Y = edge1.Curr.Y
+		ip.X = c.TopX(edge1, &ip.Y)
+		return
+	}
+
+	if edge1.Delta.X == 0 {
+		ip.X = edge1.Bot.X
+		if c.IsHorizontal(edge2) {
+			ip.Y = edge2.Bot.Y
+		} else {
+			b2 = float64(edge2.Bot.Y) - (float64(edge2.Bot.X) / edge2.Dx)
+			ip.Y = c.Round(float64(ip.X)/edge2.Dx + b2)
+		}
+	} else if edge2.Delta.X == 0 {
+		ip.X = edge2.Bot.X
+		if c.IsHorizontal(edge1) {
+			ip.Y = edge1.Bot.Y
+		} else {
+			b1 = float64(edge1.Bot.Y) - (float64(edge1.Bot.X) / edge1.Dx)
+			ip.Y = c.Round(float64(ip.X)/edge1.Dx + b1)
+		}
+	} else {
+		b1 = float64(edge1.Bot.X) - float64(edge1.Bot.Y)*edge1.Dx
+		b2 = float64(edge2.Bot.X) - float64(edge2.Bot.Y)*edge2.Dx
+		q := (b2 - b1) / (edge1.Dx - edge2.Dx)
+		ip.Y = c.Round(q)
+		if math.Abs(edge1.Dx) < math.Abs(edge2.Dx) {
+			ip.X = c.Round(edge1.Dx*q + b1)
+		} else {
+			ip.X = c.Round(edge2.Dx*q + b2)
+		}
+	}
+
+	if ip.Y < edge1.Top.Y || ip.Y < edge2.Top.Y {
+		if edge1.Top.Y > edge2.Top.Y {
+			ip.Y = edge1.Top.Y
+		} else {
+			ip.Y = edge2.Top.Y
+		}
+		if math.Abs(edge1.Dx) < math.Abs(edge2.Dx) {
+			ip.X = c.TopX(edge1, &ip.Y)
+		} else {
+			ip.X = c.TopX(edge2, &ip.Y)
+		}
+	}
+	//finally, don't allow 'ip' to be BELOW curr.Y (ie bottom of scanbeam) ...
+	if ip.Y > edge1.Curr.Y {
+		ip.Y = edge1.Curr.Y
+		//better to use the more vertical edge to derive X ...
+		if math.Abs(edge1.Dx) > math.Abs(edge2.Dx) {
+			ip.X = c.TopX(edge2, &ip.Y)
+		} else {
+			ip.X = c.TopX(edge1, &ip.Y)
+		}
+	}
+	return
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ProcessEdgesAtTopOfScanbeam(topY cInt) {
+	e := c.m_ActiveEdges
+	for e != nil {
+		//1. process maxima, treating them as if they're 'bent' horizontal edges,
+		//   but exclude maxima with horizontal edges. nb: e can't be a horizontal.
+		IsMaximaEdge := c.IsMaxima(e, topY)
+
+		if IsMaximaEdge {
+			eMaxPair := c.GetMaximaPair(e)
+			IsMaximaEdge = (eMaxPair == nil || !c.IsHorizontal(eMaxPair))
+		}
+
+		if IsMaximaEdge {
+			ePrev := e.PrevInAEL
+			c.DoMaxima(e)
+			if ePrev == nil {
+				e = c.m_ActiveEdges
+			} else {
+				e = ePrev.NextInAEL
+			}
+		} else {
+			//2. promote horizontal edges, otherwise update Curr.X and Curr.Y ...
+			if c.IsIntermediate(e, topY) && c.IsHorizontal(e.NextInLML) {
+				c.UpdateEdgeIntoAEL(e)
+				if e.OutIdx >= 0 {
+					c.AddOutPt(e, e.Bot)
+				}
+				c.AddEdgeToSEL(e)
+			} else {
+				e.Curr.X = c.TopX(e, &topY)
+				e.Curr.Y = topY
+			}
+
+			if c.StrictlySimple {
+				ePrev := e.PrevInAEL
+				if (e.OutIdx >= 0) && (e.WindDelta != 0) && ePrev != nil &&
+					(ePrev.OutIdx >= 0) && (ePrev.Curr.X == e.Curr.X) &&
+					(ePrev.WindDelta != 0) {
+					ip := e.Curr.Copy()
+					c.SetZ(ip, ePrev, e)
+					op := c.AddOutPt(ePrev, ip)
+					op2 := c.AddOutPt(e, ip)
+					c.AddJoin(op, op2, ip) //StrictlySimple (type-3) join
+				}
+			}
+
+			e = e.NextInAEL
+		}
+	}
+
+	//3. Process horizontals at the Top of the scanbeam ...
+	c.ProcessHorizontals(true)
+
+	//4. Promote intermediate vertices ...
+	e = c.m_ActiveEdges
+	for e != nil {
+		if c.IsIntermediate(e, topY) {
+			var op *OutPt
+			if e.OutIdx >= 0 {
+				op = c.AddOutPt(e, e.Top)
+			}
+			c.UpdateEdgeIntoAEL(e)
+
+			//if output polygons share an edge, they'll need joining later ...
+			ePrev := e.PrevInAEL
+			eNext := e.NextInAEL
+			if ePrev != nil && ePrev.Curr.X == e.Bot.X &&
+				ePrev.Curr.Y == e.Bot.Y && op != nil &&
+				ePrev.OutIdx >= 0 && ePrev.Curr.Y > ePrev.Top.Y &&
+				c.SlopesEqual(e, ePrev, c.m_UseFullRange) &&
+				(e.WindDelta != 0) && (ePrev.WindDelta != 0) {
+				op2 := c.AddOutPt(ePrev, e.Bot)
+				c.AddJoin(op, op2, e.Top)
+			} else if eNext != nil && eNext.Curr.X == e.Bot.X &&
+				eNext.Curr.Y == e.Bot.Y && op != nil &&
+				eNext.OutIdx >= 0 && eNext.Curr.Y > eNext.Top.Y &&
+				c.SlopesEqual(e, eNext, c.m_UseFullRange) &&
+				(e.WindDelta != 0) && (eNext.WindDelta != 0) {
+				op2 := c.AddOutPt(eNext, e.Bot)
+				c.AddJoin(op, op2, e.Top)
+			}
+		}
+		e = e.NextInAEL
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DoMaxima(e *TEdge) {
+	eMaxPair := c.GetMaximaPair(e)
+	if eMaxPair == nil {
+		if e.OutIdx >= 0 {
+			c.AddOutPt(e, e.Top)
+		}
+		c.DeleteFromAEL(e)
+		return
+	}
+
+	eNext := e.NextInAEL
+	for eNext != nil && eNext != eMaxPair {
+		c.IntersectEdges(e, eNext, e.Top, true)
+		c.SwapPositionsInAEL(e, eNext)
+		eNext = e.NextInAEL
+	}
+
+	if e.OutIdx == Unassigned && eMaxPair.OutIdx == Unassigned {
+		c.DeleteFromAEL(e)
+		c.DeleteFromAEL(eMaxPair)
+	} else if e.OutIdx >= 0 && eMaxPair.OutIdx >= 0 {
+		if e.OutIdx >= 0 {
+			c.AddLocalMaxPoly(e, eMaxPair, e.Top)
+		}
+		c.DeleteFromAEL(e)
+		c.DeleteFromAEL(eMaxPair)
+		//#if use_lines
+	} else if e.WindDelta == 0 {
+		if e.OutIdx >= 0 {
+			c.AddOutPt(e, e.Top)
+			e.OutIdx = Unassigned
+		}
+		c.DeleteFromAEL(e)
+
+		if eMaxPair.OutIdx >= 0 {
+			c.AddOutPt(eMaxPair, e.Top)
+			eMaxPair.OutIdx = Unassigned
+		}
+		c.DeleteFromAEL(eMaxPair)
+		//#endif
+	} else {
+		panic(NewClipperException("DoMaxima error"))
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func reversePath(s Path) {
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
+}
+
+func (c *Clipper) ReversePaths(polys Paths) {
+	for _, poly := range polys {
+		reversePath(poly)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func Orientation(poly Path) bool {
+	return Area(poly) >= 0
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) PointCount(pts *OutPt) int {
+	if pts == nil {
+		return 0
+	}
+	result := 0
+	p := pts
+	for {
+		result++
+		p = p.Next
+		if p == pts {
+			break
+		}
+	}
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) BuildResult() Paths {
+	polyg := Paths(make([]Path, len(c.m_PolyOuts)))
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		outRec := c.m_PolyOuts[i]
+		if outRec.Pts == nil {
+			continue
+		}
+		p := outRec.Pts.Prev
+		cnt := c.PointCount(p)
+		if cnt < 2 {
+			continue
+		}
+		pg := Path(make([]*IntPoint, 0, cnt))
+		for j := 0; j < cnt; j++ {
+			pg = append(pg, p.Pt)
+			p = p.Prev
+		}
+		polyg = append(polyg, pg)
+	}
+	return polyg
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) BuildResult2(polytree *PolyTree) {
+	polytree.Clear()
+
+	//add each output polygon/contour to polytree ...
+	polytree.m_AllPolys = make([]*PolyNode, len(c.m_PolyOuts))
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		outRec := c.m_PolyOuts[i]
+		cnt := c.PointCount(outRec.Pts)
+		if (outRec.IsOpen && cnt < 2) ||
+			(!outRec.IsOpen && cnt < 3) {
+			continue
+		}
+		c.FixHoleLinkage(outRec)
+		pn := new(PolyNode)
+		polytree.m_AllPolys[i] = pn
+		outRec.PolyNode = pn
+		pn.m_polygon = make([]*IntPoint, cnt)
+		op := outRec.Pts.Prev
+		for j := 0; j < cnt; j++ {
+			pn.m_polygon[j] = op.Pt
+			op = op.Prev
+		}
+	}
+
+	//fixup PolyNode links etc ...
+	polytree.m_Childs = make([]*PolyNode, len(c.m_PolyOuts))
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		outRec := c.m_PolyOuts[i]
+		if outRec.PolyNode == nil {
+			continue
+		} else if outRec.IsOpen {
+			outRec.PolyNode.IsOpen = true
+			polytree.AddChild(outRec.PolyNode)
+		} else if outRec.FirstLeft != nil &&
+			outRec.FirstLeft.PolyNode != nil {
+			outRec.FirstLeft.PolyNode.AddChild(outRec.PolyNode)
+		} else {
+			polytree.AddChild(outRec.PolyNode)
+		}
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) FixupOutPolygon(outRec *OutRec) {
+	//FixupOutPolygon() - removes duplicate points and simplifies consecutive
+	//parallel edges by removing the middle vertex.
+	var lastOK *OutPt
+	outRec.BottomPt = nil
+	pp := outRec.Pts
+	for {
+		if pp.Prev == pp || pp.Prev == pp.Next {
+			outRec.Pts = nil
 			return
 		}
-		if pointsEqual(pp.pt, pp.nextOp.pt) ||
-			slopesEqual(pp.prevOp.pt, pp.pt, pp.nextOp.pt, nil) {
+		//test for duplicate points and collinear edges ...
+		if (pp.Pt == pp.Next.Pt) || (pp.Pt == pp.Prev.Pt) ||
+			(c.SlopesEqual3(pp.Prev.Pt, pp.Pt, pp.Next.Pt, c.m_UseFullRange) &&
+				(!c.PreserveCollinear || !c.Pt2IsBetweenPt1AndPt3(pp.Prev.Pt, pp.Pt, pp.Next.Pt))) {
 			lastOK = nil
-			pp.prevOp.nextOp = pp.nextOp
-			pp.nextOp.prevOp = pp.prevOp
-			pp = pp.prevOp
+			pp.Prev.Next = pp.Next
+			pp.Next.Prev = pp.Prev
+			pp = pp.Prev
 		} else if pp == lastOK {
 			break
 		} else {
 			if lastOK == nil {
 				lastOK = pp
 			}
-			pp = pp.nextOp
+			pp = pp.Next
 		}
 	}
-	outRec.pts = pp
+	outRec.Pts = pp
 }
 
-func fixHoleLinkage(outrec *outRec) {
-	if outrec.FirstLeft == nil ||
-		(outrec.isHole != outrec.FirstLeft.isHole &&
-			outrec.FirstLeft.pts != nil) {
-		return
-	}
-	orfl := outrec.FirstLeft
-	for orfl != nil &&
-		(orfl.isHole == outrec.isHole || orfl.pts == nil) {
-		orfl = orfl.FirstLeft
-	}
-	outrec.FirstLeft = orfl
-}
+//------------------------------------------------------------------------------
 
-func getOverlapSegment(pt1a, pt1b, pt2a, pt2b *Point) (*Point, *Point, bool) {
-	// precondition: segments are co-linear
-	var pt1, pt2 *Point
-	if intAbs(pt1a.X-pt1b.X) > intAbs(pt1a.Y-pt1b.Y) {
-		if pt1a.X > pt1b.X {
-			tmp := pt1a
-			pt1a = pt1b
-			pt1b = tmp
-		}
-		if pt2a.X > pt2b.X {
-			tmp := pt2a
-			pt2a = pt2b
-			pt2b = tmp
-		}
-		if pt1a.X > pt2a.X {
-			pt1 = pt1a
-		} else {
-			pt1 = pt2a
-		}
-		if pt1b.X < pt2b.X {
-			pt2 = pt1b
-		} else {
-			pt2 = pt2b
-		}
-		return pt1, pt2, pt1.X < pt2.X
+func (c *Clipper) DupOutPt(outPt *OutPt, InsertAfter bool) *OutPt {
+	result := new(OutPt)
+	result.Pt = outPt.Pt
+	result.Idx = outPt.Idx
+	if InsertAfter {
+		result.Next = outPt.Next
+		result.Prev = outPt
+		outPt.Next.Prev = result
+		outPt.Next = result
 	} else {
-		if pt1a.Y < pt1b.Y {
-			tmp := pt1a
-			pt1a = pt1b
-			pt1b = tmp
-		}
-		if pt2a.Y < pt2b.Y {
-			tmp := pt2a
-			pt2a = pt2b
-			pt2b = tmp
-		}
-		if pt1a.Y < pt2a.Y {
-			pt1 = pt1a
-		} else {
-			pt1 = pt2a
-		}
-		if pt1b.Y > pt2b.Y {
-			pt2 = pt1b
-		} else {
-			pt2 = pt2b
-		}
-		return pt1, pt2, pt1.Y > pt2.Y
+		result.Prev = outPt.Prev
+		result.Next = outPt
+		outPt.Prev.Next = result
+		outPt.Prev = result
 	}
+	return result
 }
 
-func findSegment(outPt *outPt, pt1, pt2 *Point) (*outPt, *Point, *Point, bool) {
-	if outPt == nil {
-		return outPt, pt1, pt2, false
+//------------------------------------------------------------------------------
+
+func (c *Clipper) GetOverlap(a1, a2, b1, b2 cInt, Left, Right *cInt) bool {
+	if a1 < a2 {
+		if b1 < b2 {
+			*Left = max(a1, b1)
+			*Right = min(a2, b2)
+		} else {
+			*Left = max(a1, b2)
+			*Right = min(a2, b1)
+		}
+	} else {
+		if b1 < b2 {
+			*Left = max(a2, b1)
+			*Right = min(a1, b2)
+		} else {
+			*Left = max(a2, b2)
+			*Right = min(a1, b1)
+		}
 	}
-	pt1a := pt1
-	pt2a := pt2
-	outPt2 := outPt
-	for {
-		if slopesEqual(pt1a, pt2a, outPt.pt, outPt.prevOp.pt) && slopesEqual(pt1a, pt2a, outPt.pt, nil) {
-			pt1, pt2, overlap := getOverlapSegment(pt1a, pt2a, outPt.pt, outPt.prevOp.pt)
-			if overlap {
-				return outPt, pt1, pt2, true
+	return *Left < *Right
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
+	Pt *IntPoint, DiscardLeft bool) bool {
+	var Dir1 Direction
+	if op1.Pt.X > op1b.Pt.X {
+		Dir1 = dRightToLeft
+	} else {
+		Dir1 = dLeftToRight
+	}
+	var Dir2 Direction
+	if op2.Pt.X > op2b.Pt.X {
+		Dir2 = dRightToLeft
+	} else {
+		Dir2 = dLeftToRight
+	}
+	if Dir1 == Dir2 {
+		return false
+	}
+
+	//When DiscardLeft, we want Op1b to be on the Left of Op1, otherwise we
+	//want Op1b to be on the Right. (And likewise with Op2 and Op2b.)
+	//So, to facilitate this while inserting Op1b and Op2b ...
+	//when DiscardLeft, make sure we're AT or RIGHT of Pt before adding Op1b,
+	//otherwise make sure we're AT or LEFT of Pt. (Likewise with Op2b.)
+	if Dir1 == dLeftToRight {
+		for op1.Next.Pt.X <= Pt.X &&
+			op1.Next.Pt.X >= op1.Pt.X && op1.Next.Pt.Y == Pt.Y {
+			op1 = op1.Next
+		}
+		if DiscardLeft && (op1.Pt.X != Pt.X) {
+			op1 = op1.Next
+		}
+		op1b = c.DupOutPt(op1, !DiscardLeft)
+		if op1b.Pt != Pt {
+			op1 = op1b
+			op1.Pt = Pt
+			op1b = c.DupOutPt(op1, !DiscardLeft)
+		}
+	} else {
+		for op1.Next.Pt.X >= Pt.X &&
+			op1.Next.Pt.X <= op1.Pt.X && op1.Next.Pt.Y == Pt.Y {
+			op1 = op1.Next
+		}
+		if !DiscardLeft && (op1.Pt.X != Pt.X) {
+			op1 = op1.Next
+		}
+		op1b = c.DupOutPt(op1, DiscardLeft)
+		if op1b.Pt != Pt {
+			op1 = op1b
+			op1.Pt = Pt
+			op1b = c.DupOutPt(op1, DiscardLeft)
+		}
+	}
+
+	if Dir2 == dLeftToRight {
+		for op2.Next.Pt.X <= Pt.X &&
+			op2.Next.Pt.X >= op2.Pt.X && op2.Next.Pt.Y == Pt.Y {
+			op2 = op2.Next
+		}
+		if DiscardLeft && (op2.Pt.X != Pt.X) {
+			op2 = op2.Next
+		}
+		op2b = c.DupOutPt(op2, !DiscardLeft)
+		if op2b.Pt != Pt {
+			op2 = op2b
+			op2.Pt = Pt
+			op2b = c.DupOutPt(op2, !DiscardLeft)
+		}
+	} else {
+		for op2.Next.Pt.X >= Pt.X &&
+			op2.Next.Pt.X <= op2.Pt.X && op2.Next.Pt.Y == Pt.Y {
+			op2 = op2.Next
+		}
+		if !DiscardLeft && (op2.Pt.X != Pt.X) {
+			op2 = op2.Next
+		}
+		op2b = c.DupOutPt(op2, DiscardLeft)
+		if op2b.Pt != Pt {
+			op2 = op2b
+			op2.Pt = Pt
+			op2b = c.DupOutPt(op2, DiscardLeft)
+		}
+	}
+
+	if (Dir1 == dLeftToRight) == DiscardLeft {
+		op1.Prev = op2
+		op2.Next = op1
+		op1b.Next = op2b
+		op2b.Prev = op1b
+	} else {
+		op1.Next = op2
+		op2.Prev = op1
+		op1b.Prev = op2b
+		op2b.Next = op1b
+	}
+	return true
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) JoinPoints(j *Join, outRec1, outRec2 *OutRec) bool {
+	op1 := j.OutPt1
+	op2 := j.OutPt2
+	var op1b, op2b *OutPt
+
+	//There are 3 kinds of joins for output polygons ...
+	//1. Horizontal joins where Join.OutPt1 & Join.OutPt2 are a vertices anywhere
+	//along (horizontal) collinear edges (& Join.OffPt is on the same horizontal).
+	//2. Non-horizontal joins where Join.OutPt1 & Join.OutPt2 are at the same
+	//location at the Bottom of the overlapping segment (& Join.OffPt is above).
+	//3. StrictlySimple joins where edges touch but are not collinear and where
+	//Join.OutPt1, Join.OutPt2 & Join.OffPt all share the same point.
+	isHorizontal := (j.OutPt1.Pt.Y == j.OffPt.Y)
+
+	if isHorizontal && (j.OffPt == j.OutPt1.Pt) && (j.OffPt == j.OutPt2.Pt) {
+		//Strictly Simple join ...
+		if outRec1 != outRec2 {
+			return false
+		}
+		op1b = j.OutPt1.Next
+		for op1b != op1 && (op1b.Pt == j.OffPt) {
+			op1b = op1b.Next
+		}
+		reverse1 := (op1b.Pt.Y > j.OffPt.Y)
+		op2b = j.OutPt2.Next
+		for op2b != op2 && (op2b.Pt == j.OffPt) {
+			op2b = op2b.Next
+		}
+		reverse2 := (op2b.Pt.Y > j.OffPt.Y)
+		if reverse1 == reverse2 {
+			return false
+		}
+		if reverse1 {
+			op1b = c.DupOutPt(op1, false)
+			op2b = c.DupOutPt(op2, true)
+			op1.Prev = op2
+			op2.Next = op1
+			op1b.Next = op2b
+			op2b.Prev = op1b
+			j.OutPt1 = op1
+			j.OutPt2 = op1b
+			return true
+		} else {
+			op1b = c.DupOutPt(op1, true)
+			op2b = c.DupOutPt(op2, false)
+			op1.Next = op2
+			op2.Prev = op1
+			op1b.Prev = op2b
+			op2b.Next = op1b
+			j.OutPt1 = op1
+			j.OutPt2 = op1b
+			return true
+		}
+	} else if isHorizontal {
+		//treat horizontal joins differently to non-horizontal joins since with
+		//them we're not yet sure where the overlapping is. OutPt1.Pt & OutPt2.Pt
+		//may be anywhere along the horizontal edge.
+		op1b = op1
+		for op1.Prev.Pt.Y == op1.Pt.Y && op1.Prev != op1b && op1.Prev != op2 {
+			op1 = op1.Prev
+		}
+		for op1b.Next.Pt.Y == op1b.Pt.Y && op1b.Next != op1 && op1b.Next != op2 {
+			op1b = op1b.Next
+		}
+		if op1b.Next == op1 || op1b.Next == op2 {
+			return false //a flat 'polygon'
+		}
+
+		op2b = op2
+		for op2.Prev.Pt.Y == op2.Pt.Y && op2.Prev != op2b && op2.Prev != op1b {
+			op2 = op2.Prev
+		}
+		for op2b.Next.Pt.Y == op2b.Pt.Y && op2b.Next != op2 && op2b.Next != op1 {
+			op2b = op2b.Next
+		}
+		if op2b.Next == op2 || op2b.Next == op1 {
+			return false //a flat 'polygon'
+		}
+
+		var Left, Right cInt
+		//Op1 -. Op1b & Op2 -. Op2b are the extremites of the horizontal edges
+		if !c.GetOverlap(op1.Pt.X, op1b.Pt.X, op2.Pt.X, op2b.Pt.X, &Left, &Right) {
+			return false
+		}
+
+		//DiscardLeftSide: when overlapping edges are joined, a spike will created
+		//which needs to be cleaned up. However, we don't want Op1 or Op2 caught up
+		//on the discard Side as either may still be needed for other joins ...
+		var Pt *IntPoint
+		var DiscardLeftSide bool
+		if op1.Pt.X >= Left && op1.Pt.X <= Right {
+			Pt = op1.Pt
+			DiscardLeftSide = (op1.Pt.X > op1b.Pt.X)
+		} else if op2.Pt.X >= Left && op2.Pt.X <= Right {
+			Pt = op2.Pt
+			DiscardLeftSide = (op2.Pt.X > op2b.Pt.X)
+		} else if op1b.Pt.X >= Left && op1b.Pt.X <= Right {
+			Pt = op1b.Pt
+			DiscardLeftSide = op1b.Pt.X > op1.Pt.X
+		} else {
+			Pt = op2b.Pt
+			DiscardLeftSide = (op2b.Pt.X > op2.Pt.X)
+		}
+		j.OutPt1 = op1
+		j.OutPt2 = op2
+		return c.JoinHorz(op1, op1b, op2, op2b, Pt, DiscardLeftSide)
+	} else {
+		//nb: For non-horizontal joins ...
+		//    1. Jr.OutPt1.Pt.Y == Jr.OutPt2.Pt.Y
+		//    2. Jr.OutPt1.Pt > Jr.OffPt.Y
+
+		//make sure the polygons are correctly oriented ...
+		op1b = op1.Next
+		for (op1b.Pt == op1.Pt) && (op1b != op1) {
+			op1b = op1b.Next
+		}
+		Reverse1 := ((op1b.Pt.Y > op1.Pt.Y) ||
+			!c.SlopesEqual3(op1.Pt, op1b.Pt, j.OffPt, c.m_UseFullRange))
+		if Reverse1 {
+			op1b = op1.Prev
+			for (op1b.Pt == op1.Pt) && (op1b != op1) {
+				op1b = op1b.Prev
+			}
+			if (op1b.Pt.Y > op1.Pt.Y) ||
+				!c.SlopesEqual3(op1.Pt, op1b.Pt, j.OffPt, c.m_UseFullRange) {
+				return false
 			}
 		}
-		outPt = outPt.nextOp
-		if outPt == outPt2 {
-			return outPt, pt1, pt2, false
+		op2b = op2.Next
+		for (op2b.Pt == op2.Pt) && (op2b != op2) {
+			op2b = op2b.Next
 		}
-	}
-}
+		Reverse2 := ((op2b.Pt.Y > op2.Pt.Y) ||
+			!c.SlopesEqual3(op2.Pt, op2b.Pt, j.OffPt, c.m_UseFullRange))
+		if Reverse2 {
+			op2b = op2.Prev
+			for (op2b.Pt == op2.Pt) && (op2b != op2) {
+				op2b = op2b.Prev
+			}
+			if (op2b.Pt.Y > op2.Pt.Y) ||
+				!c.SlopesEqual3(op2.Pt, op2b.Pt, j.OffPt, c.m_UseFullRange) {
+				return false
+			}
+		}
 
-func pt3IsBetweenPt1AndPt2(pt1, pt2, pt3 *Point) bool {
-	if pointsEqual(pt1, pt3) || pointsEqual(pt2, pt3) {
-		return true
-	} else if pt1.X != pt2.X {
-		return (pt1.X < pt3.X) == (pt3.X < pt2.X)
-	} else {
-		return (pt1.Y < pt3.Y) == (pt3.Y < pt2.Y)
-	}
-}
-
-func insertPolyPtBetween(outPt1, outPt2 *outPt, pt *Point) *outPt {
-	if outPt1 == outPt2 {
-		panic("JoinError")
-	}
-	result := newOutPt(outPt1.idx, pt)
-	if outPt2 == outPt1.nextOp {
-		outPt1.nextOp = result
-		outPt2.prevOp = result
-		result.nextOp = outPt2
-		result.prevOp = outPt1
-	} else {
-		outPt2.nextOp = result
-		outPt1.prevOp = result
-		result.nextOp = outPt1
-		result.prevOp = outPt2
-	}
-	return result
-}
-
-func PointOnLineSegment(pt, linePt1, linePt2 *Point) bool {
-	return ((pt.X == linePt1.X) && (pt.Y == linePt1.Y)) ||
-		((pt.X == linePt2.X) && (pt.Y == linePt2.Y)) ||
-		(((pt.X > linePt1.X) == (pt.X < linePt2.X)) &&
-			((pt.Y > linePt1.Y) == (pt.Y < linePt2.Y)) &&
-			((pt.X-linePt1.X)*(linePt2.Y-linePt1.Y) ==
-				(linePt2.X-linePt1.X)*(pt.Y-linePt1.Y)))
-}
-
-func PointOnPolygon(pt *Point, pp *outPt) bool {
-	pp2 := pp
-	for {
-		if PointOnLineSegment(pt, pp2.pt, pp2.nextOp.pt) {
+		if (op1b == op1) || (op2b == op2) || (op1b == op2b) ||
+			((outRec1 == outRec2) && (Reverse1 == Reverse2)) {
 			return false
 		}
-		pp2 = pp2.nextOp
-		if pp2 == pp {
-			return false
-		}
-	}
-}
 
-func PointInPolygon(pt *Point, outPt *outPt) bool {
-	result := false
-	outPt2 := outPt
-	for {
-		if (((outPt2.pt.Y <= pt.Y) && (pt.Y < outPt2.prevOp.pt.Y)) ||
-			((outPt2.prevOp.pt.Y <= pt.Y) && (pt.Y < outPt2.pt.Y))) &&
-			(pt.X < (outPt2.prevOp.pt.X-outPt2.pt.X)*(pt.Y-outPt2.pt.Y)/
-				(outPt2.prevOp.pt.Y-outPt2.pt.Y)+outPt2.pt.X) {
-			result = !result
-		}
-		outPt2 = outPt2.nextOp
-		if outPt2 == outPt {
-			break
-		}
-	}
-	return result
-}
-
-func poly2ContainsPoly1(outPt1, outPt2 *outPt) bool {
-	pt := outPt1
-	if PointOnPolygon(pt.pt, outPt2) {
-		pt = pt.nextOp
-		for pt != outPt1 && PointOnPolygon(pt.pt, outPt2) {
-			pt = pt.nextOp
-		}
-		if pt == outPt1 {
+		if Reverse1 {
+			op1b = c.DupOutPt(op1, false)
+			op2b = c.DupOutPt(op2, true)
+			op1.Prev = op2
+			op2.Next = op1
+			op1b.Next = op2b
+			op2b.Prev = op1b
+			j.OutPt1 = op1
+			j.OutPt2 = op1b
+			return true
+		} else {
+			op1b = c.DupOutPt(op1, true)
+			op2b = c.DupOutPt(op2, false)
+			op1.Next = op2
+			op2.Prev = op1
+			op1b.Prev = op2b
+			op2b.Next = op1b
+			j.OutPt1 = op1
+			j.OutPt2 = op1b
 			return true
 		}
 	}
-	return PointInPolygon(pt.pt, outPt2)
 }
 
-func edgesAdjacent(inode *intersectNode) bool {
-	return (inode.e1.nextInSEL == inode.e2) ||
-		(inode.e1.prevInSEL == inode.e2)
-}
+//----------------------------------------------------------------------
 
-func updateOutPtIdxs(outrec *outRec) {
-	op := outrec.pts
-	for {
-		op.idx = outrec.idx
-		op = op.prevOp
-		if op == outrec.pts {
-			break
+//returns 0 if false, +1 if true, -1 if pt ON polygon boundary
+//See "The Point in Polygon Problem for Arbitrary Polygons" by Hormann & Agathos
+//http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.88.5498&rep=rep1&type=pdf
+func (c *Clipper) PointInPolygon(pt *IntPoint, path Path) int {
+	result := 0
+	cnt := len(path)
+	if cnt < 3 {
+		return 0
+	}
+	ip := path[0]
+	for i := 1; i <= cnt; i++ {
+		var ipNext *IntPoint
+		if i == cnt {
+			ipNext = path[0]
+		} else {
+			ipNext = path[i]
 		}
-	}
-}
-
-type Clipper struct {
-	ClipperBase
-	ReverseSolution bool
-	ForceSimple     bool
-	polyOutList     []*outRec
-	clipType        ClipType
-	scanbeam        *scanbeam
-	activeEdges     *edge
-	sortedEdges     *edge
-	intersectNodes  *intersectNode
-	clipFillType    PolyFillType
-	subjFillType    PolyFillType
-	executeLocked   bool
-	usingPolyTree   bool
-	joinList        []*joinRec
-	horzJoins       *horzJoin
-}
-
-func NewClipper() *Clipper {
-	self := new(Clipper)
-	self.ReverseSolution = false
-	self.ForceSimple = false
-	self.polyOutList = make([]*outRec, 0)
-	self.clipType = Intersection
-	self.clipFillType = EvenOdd
-	self.subjFillType = EvenOdd
-	return self
-}
-
-func (self *Clipper) reset() {
-	self.resetBase()
-	self.scanbeam = nil
-	self.polyOutList = make([]*outRec, 0)
-	lm := self.localMinList
-	for lm != nil {
-		self.insertScanbeam(lm.Y)
-		lm = lm.nextLm
-	}
-}
-
-func (self *Clipper) Clear() {
-	self.polyOutList = make([]*outRec, 0)
-	self.clearBase()
-}
-
-func (self *Clipper) printActiveEdges() {
-	e := self.activeEdges
-	for e != nil {
-		fmt.Println(e)
-		e = e.nextInAEL
-	}
-}
-
-func (self *Clipper) insertScanbeam(y int) {
-	if self.scanbeam == nil {
-		self.scanbeam = &scanbeam{Y: y}
-	} else if y > self.scanbeam.Y {
-		self.scanbeam = &scanbeam{y, self.scanbeam}
-	} else {
-		sb := self.scanbeam
-		for sb.nextSb != nil && y <= sb.nextSb.Y {
-			sb = sb.nextSb
+		if ipNext.Y == pt.Y {
+			if (ipNext.X == pt.X) || (ip.Y == pt.Y &&
+				((ipNext.X > pt.X) == (ip.X < pt.X))) {
+				return -1
+			}
 		}
-		if y == sb.Y {
-			return
+		if (ip.Y < pt.Y) != (ipNext.Y < pt.Y) {
+			if ip.X >= pt.X {
+				if ipNext.X > pt.X {
+					result = 1 - result
+				} else {
+					d := float64(ip.X-pt.X)*float64(ipNext.Y-pt.Y) -
+						float64(ipNext.X-pt.X)*float64(ip.Y-pt.Y)
+					if d == 0 {
+						return -1
+					} else if (d > 0) == (ipNext.Y > ip.Y) {
+						result = 1 - result
+					}
+				}
+			} else {
+				if ipNext.X > pt.X {
+					d := float64(ip.X-pt.X)*float64(ipNext.Y-pt.Y) -
+						float64(ipNext.X-pt.X)*float64(ip.Y-pt.Y)
+					if d == 0 {
+						return -1
+					} else if (d > 0) == (ipNext.Y > ip.Y) {
+						result = 1 - result
+					}
+				}
+			}
 		}
-		newSb := &scanbeam{y, sb.nextSb}
-		sb.nextSb = newSb
+		ip = ipNext
 	}
-}
-
-func (self *Clipper) popScanbeam() int {
-	result := self.scanbeam.Y
-	self.scanbeam = self.scanbeam.nextSb
 	return result
 }
 
-func (self *Clipper) setWindingCount(edge *edge) {
-	e := edge.prevInAEL
-	for e != nil && e.polyType != edge.polyType {
-		e = e.prevInAEL
-	}
-	if e == nil {
-		edge.windCnt = edge.windDelta
-		edge.windCnt2 = 0
-		e = self.activeEdges
-	} else if self.isEvenOddFillType(edge) {
-		edge.windCnt = 1
-		edge.windCnt2 = e.windCnt2
-		e = e.nextInAEL
-	} else {
-		if e.windCnt*e.windDelta < 0 {
-			if intAbs(e.windCnt) > 1 {
-				if e.windDelta*edge.windDelta < 0 {
-					edge.windCnt = e.windCnt
-				} else {
-					edge.windCnt = e.windCnt + edge.windDelta
-				}
-			} else {
-				edge.windCnt = e.windCnt + e.windDelta + edge.windDelta
-			}
-		} else if (intAbs(e.windCnt) > 1) && (e.windDelta*edge.windDelta < 0) {
-			edge.windCnt = e.windCnt
-		} else if e.windCnt+edge.windDelta == 0 {
-			edge.windCnt = e.windCnt
-		} else {
-			edge.windCnt = e.windCnt + edge.windDelta
-		}
-		edge.windCnt2 = e.windCnt2
-		e = e.nextInAEL
-	}
-	// update windCnt2 ...
-	if self.isEvenOddAltFillType(edge) {
-		for e != edge {
-			if edge.windCnt2 == 0 {
-				edge.windCnt2 = 1
-			} else {
-				edge.windCnt2 = 0
-			}
-			e = e.nextInAEL
-		}
-	} else {
-		for e != edge {
-			edge.windCnt2 += e.windDelta
-			e = e.nextInAEL
-		}
-	}
-}
+//------------------------------------------------------------------------------
 
-func (self *Clipper) isEvenOddFillType(edge *edge) bool {
-	if edge.polyType == Subject {
-		return self.subjFillType == EvenOdd
-	} else {
-		return self.clipFillType == EvenOdd
-	}
-}
-
-func (self *Clipper) isEvenOddAltFillType(edge *edge) bool {
-	if edge.polyType == Subject {
-		return self.clipFillType == EvenOdd
-	} else {
-		return self.subjFillType == EvenOdd
-	}
-}
-
-func (self *Clipper) isContributing(edge *edge) bool {
-	var pft, pft2 PolyFillType
-	if edge.polyType == Subject {
-		pft = self.subjFillType
-		pft2 = self.clipFillType
-	} else {
-		pft = self.clipFillType
-		pft2 = self.subjFillType
-	}
-	if pft == EvenOdd || pft == NonZero {
-		if intAbs(edge.windCnt) != 1 {
-			return false
-		}
-	} else if pft == Positive {
-		if edge.windCnt != 1 {
-			return false
-		}
-	} else if pft == Negative {
-		if edge.windCnt != -1 {
-			return false
-		}
-	}
-
-	if self.clipType == Intersection { //////////////////////
-		if pft2 == EvenOdd || pft2 == NonZero {
-			return edge.windCnt2 != 0
-		} else if pft2 == Positive {
-			return edge.windCnt2 > 0
-		} else {
-			return edge.windCnt2 < 0 // Negative
-		}
-	} else if self.clipType == Union { //////////////////////
-		if pft2 == EvenOdd || pft2 == NonZero {
-			return edge.windCnt2 == 0
-		} else if pft2 == Positive {
-			return edge.windCnt2 <= 0
-		} else {
-			return edge.windCnt2 >= 0 // Negative
-		}
-	} else if self.clipType == Difference { //////////////////////
-		if edge.polyType == Subject {
-			if pft2 == EvenOdd || pft2 == NonZero {
-				return edge.windCnt2 == 0
-			} else if pft2 == Positive {
-				return edge.windCnt2 <= 0
-			} else {
-				return edge.windCnt2 >= 0
-			}
-		} else {
-			if pft2 == EvenOdd || pft2 == NonZero {
-				return edge.windCnt2 != 0
-			} else if pft2 == Positive {
-				return edge.windCnt2 > 0
-			} else {
-				return edge.windCnt2 < 0
-			}
-		}
-	} else { // self._ClipType == ClipType.XOR:     //////////////////////
-		return true
-	}
-}
-
-func (self *Clipper) addEdgeToSEL(edge *edge) {
-	if self.sortedEdges == nil {
-		self.sortedEdges = edge
-		edge.prevInSEL = nil
-		edge.nextInSEL = nil
-	} else {
-		// add edge to front of list ...
-		edge.nextInSEL = self.sortedEdges
-		edge.prevInSEL = nil
-		self.sortedEdges.prevInSEL = edge
-		self.sortedEdges = nil
-	}
-}
-
-func (self *Clipper) copyAELToSEL() {
-	e := self.activeEdges
-	self.sortedEdges = e
-	for e != nil {
-		e.prevInSEL = e.prevInAEL
-		e.nextInSEL = e.nextInAEL
-		e = e.nextInAEL
-	}
-}
-
-func (self *Clipper) insertEdgeIntoAEL(edge *edge) {
-	edge.prevInAEL = nil
-	edge.nextInAEL = nil
-	if self.activeEdges == nil {
-		self.activeEdges = edge
-	} else if e2InsertsBeforeE1(self.activeEdges, edge) {
-		edge.nextInAEL = self.activeEdges
-		self.activeEdges.prevInAEL = edge
-		self.activeEdges = edge
-	} else {
-		e := self.activeEdges
-		for e.nextInAEL != nil &&
-			!e2InsertsBeforeE1(e.nextInAEL, edge) {
-			e = e.nextInAEL
-		}
-		edge.nextInAEL = e.nextInAEL
-		if e.nextInAEL != nil {
-			e.nextInAEL.prevInAEL = edge
-		}
-		edge.prevInAEL = e
-		e.nextInAEL = edge
-	}
-}
-
-func (self *Clipper) insertLocalMinimaIntoAEL(botY int) {
-	for self.currentLocMin != nil &&
-		self.currentLocMin.Y == botY {
-		lb := self.currentLocMin.leftBound
-		rb := self.currentLocMin.rightBound
-		self.insertEdgeIntoAEL(lb)
-		self.insertScanbeam(lb.Top.Y)
-		self.insertEdgeIntoAEL(rb)
-		if self.isEvenOddFillType(lb) {
-			lb.windDelta = 1
-			rb.windDelta = 1
-		} else {
-			rb.windDelta = -lb.windDelta
-		}
-		self.setWindingCount(lb)
-		rb.windCnt = lb.windCnt
-		rb.windCnt2 = lb.windCnt2
-		if rb.dx == horizontal {
-			self.addEdgeToSEL(rb)
-			self.insertScanbeam(rb.nextInLML.Top.Y)
-		} else {
-			self.insertScanbeam(rb.Top.Y)
-		}
-		if self.isContributing(lb) {
-			self.addLocalMinPoly(lb, rb, &Point{lb.Curr.X, self.currentLocMin.Y})
-		}
-
-		if rb.outIdx >= 0 && rb.dx == horizontal && self.horzJoins != nil {
-			hj := self.horzJoins
-			for {
-				_, _, overlap := getOverlapSegment(hj.edge.Bot, hj.edge.Top, rb.Bot, rb.Top)
-				if overlap {
-					self.addJoin(hj.edge, rb, hj.savedIdx, -1)
-				}
-				hj = hj.nextHj
-				if hj == self.horzJoins {
-					break
-				}
-			}
-		}
-		if lb.nextInAEL != rb {
-			if rb.outIdx >= 0 && rb.prevInAEL.outIdx >= 0 && slopesEqual2(rb.prevInAEL, rb) {
-				self.addJoin(rb, rb.prevInAEL, -1, -1)
-			}
-			e := lb.nextInAEL
-			pt := lb.Curr
-			for e != rb {
-				self.intersectEdges(rb, e, pt, protectsNeither)
-				e = e.nextInAEL
-			}
-		}
-		self.popLocalMinima()
-	}
-}
-
-func (self *Clipper) swapPositionsInAEL(e1, e2 *edge) {
-	var nextE, prevE *edge
-	if e1.nextInAEL == e2 {
-		nextE = e2.nextInAEL
-		if nextE != nil {
-			nextE.prevInAEL = e1
-		}
-		prevE = e1.prevInAEL
-		if prevE != nil {
-			prevE.nextInAEL = e2
-		}
-		e2.prevInAEL = prevE
-		e2.nextInAEL = e1
-		e1.prevInAEL = e2
-		e1.nextInAEL = nextE
-	} else if e2.nextInAEL == e1 {
-		nextE = e1.nextInAEL
-		if nextE != nil {
-			nextE.prevInAEL = e2
-		}
-		prevE = e2.prevInAEL
-		if prevE != nil {
-			prevE.nextInAEL = e1
-		}
-		e1.prevInAEL = prevE
-		e1.nextInAEL = e2
-		e2.prevInAEL = e1
-		e2.nextInAEL = nextE
-	} else {
-		nextE = e1.nextInAEL
-		prevE = e1.prevInAEL
-		e1.nextInAEL = e2.nextInAEL
-		if e1.nextInAEL != nil {
-			e1.nextInAEL.prevInAEL = e1
-		}
-		e1.prevInAEL = e2.prevInAEL
-		if e1.prevInAEL != nil {
-			e1.prevInAEL.nextInAEL = e1
-		}
-		e2.nextInAEL = nextE
-		if e2.nextInAEL != nil {
-			e2.nextInAEL.prevInAEL = e2
-		}
-		e2.prevInAEL = prevE
-		if e2.prevInAEL != nil {
-			e2.prevInAEL.nextInAEL = e2
-		}
-	}
-	if e1.prevInAEL == nil {
-		self.activeEdges = e1
-	} else if e2.prevInAEL == nil {
-		self.activeEdges = e2
-	}
-}
-
-func (self *Clipper) swapPositionsInSEL(e1, e2 *edge) {
-	var nextE, prevE *edge
-	if e1.nextInSEL == e2 {
-		nextE = e2.nextInSEL
-		if nextE != nil {
-			nextE.prevInSEL = e1
-		}
-		prevE = e1.prevInSEL
-		if prevE != nil {
-			prevE.nextInSEL = e2
-		}
-		e2.prevInSEL = prevE
-		e2.nextInSEL = e1
-		e1.prevInSEL = e2
-		e1.nextInSEL = nextE
-	} else if e2.nextInSEL == e1 {
-		nextE = e1.nextInSEL
-		if nextE != nil {
-			nextE.prevInSEL = e2
-		}
-		prevE = e2.prevInSEL
-		if prevE != nil {
-			prevE.nextInSEL = e1
-		}
-		e1.prevInSEL = prevE
-		e1.nextInSEL = e2
-		e2.prevInSEL = e1
-		e2.nextInSEL = nextE
-	} else {
-		nextE = e1.nextInSEL
-		prevE = e1.prevInSEL
-		e1.nextInSEL = e2.nextInSEL
-		e1.nextInSEL = e2.nextInSEL
-		if e1.nextInSEL != nil {
-			e1.nextInSEL.prevInSEL = e1
-		}
-		e1.prevInSEL = e2.prevInSEL
-		if e1.prevInSEL != nil {
-			e1.prevInSEL.nextInSEL = e1
-		}
-		e2.nextInSEL = nextE
-		if e2.nextInSEL != nil {
-			e2.nextInSEL.prevInSEL = e2
-		}
-		e2.prevInSEL = prevE
-		if e2.prevInSEL != nil {
-			e2.prevInSEL.nextInSEL = e2
-		}
-		if e1.prevInSEL == nil {
-			self.sortedEdges = e1
-		} else if e2.prevInSEL == nil {
-			self.sortedEdges = e2
-		}
-	}
-}
-
-func (self *Clipper) isTopHorz(xPos int) bool {
-	e := self.sortedEdges
-	for e != nil {
-		if (xPos >= min(e.Curr.X, e.Top.X)) && (xPos <= max(e.Curr.X, e.Top.X)) {
-			return false
-		}
-		e = e.nextInSEL
-	}
-	return true
-}
-
-func (self *Clipper) processHorizontal(horzEdge *edge) {
-	var horzLeft, horzRight int
-	var direction direction
-	if horzEdge.Curr.X < horzEdge.Top.X {
-		horzLeft = horzEdge.Curr.X
-		horzRight = horzEdge.Top.X
-		direction = leftToRight
-	} else {
-		horzLeft = horzEdge.Top.X
-		horzRight = horzEdge.Curr.X
-		direction = rightToLeft
-	}
-	var eMaxPair *edge
-	if horzEdge.nextInLML == nil {
-		eMaxPair = getMaximaPair(horzEdge)
-	}
-	e := getnextInAEL(horzEdge, direction)
-	for e != nil {
-		if (e.Curr.X == horzEdge.Top.X) && eMaxPair == nil {
-			if slopesEqual2(e, horzEdge.nextInLML) {
-				if horzEdge.outIdx >= 0 && e.outIdx >= 0 {
-					self.addJoin(horzEdge.nextInLML, e, horzEdge.outIdx, -1)
-				}
-				break
-			} else if e.dx < horzEdge.nextInLML.dx {
-				break
-			}
-		}
-		eNext := getnextInAEL(e, direction)
-		if eMaxPair != nil ||
-			((direction == leftToRight) && (e.Curr.X < horzRight)) ||
-			((direction == rightToLeft) && (e.Curr.X > horzLeft)) {
-			if e == eMaxPair {
-				if direction == leftToRight {
-					self.intersectEdges(horzEdge, e,
-						&Point{e.Curr.X, horzEdge.Curr.Y}, protectsNeither)
-				} else {
-					self.intersectEdges(e, horzEdge,
-						&Point{e.Curr.X, horzEdge.Curr.Y}, protectsNeither)
-				}
-				return
-			} else if e.dx == horizontal && !isMinima(e) && e.Curr.X <= e.Top.X {
-				if direction == leftToRight {
-					self.intersectEdges(horzEdge, e, &Point{e.Curr.X, horzEdge.Curr.Y},
-						protectRight(!self.isTopHorz(e.Curr.X)))
-				} else {
-					self.intersectEdges(e, horzEdge, &Point{e.Curr.X, horzEdge.Curr.Y},
-						protectLeft(!self.isTopHorz(e.Curr.X)))
-				}
-			} else if direction == leftToRight {
-				self.intersectEdges(horzEdge, e, &Point{e.Curr.X, horzEdge.Curr.Y},
-					protectRight(!self.isTopHorz(e.Curr.X)))
-			} else {
-				self.intersectEdges(e, horzEdge, &Point{e.Curr.X, horzEdge.Curr.Y},
-					protectLeft(!self.isTopHorz(e.Curr.X)))
-			}
-			self.swapPositionsInAEL(horzEdge, e)
-		} else if (direction == leftToRight && e.Curr.X >= horzRight) ||
-			(direction == rightToLeft && e.Curr.X <= horzLeft) {
-			break
-		}
-		e = eNext
-	}
-	if horzEdge.nextInLML != nil {
-		if horzEdge.outIdx >= 0 {
-			self.addOutPt(horzEdge, horzEdge.Top)
-		}
-		self.updateEdgeIntoAEL(horzEdge)
-	} else {
-		if horzEdge.outIdx >= 0 {
-			self.intersectEdges(horzEdge, eMaxPair,
-				&Point{horzEdge.Top.X, horzEdge.Curr.Y}, protectsBoth)
-		}
-		if eMaxPair.outIdx >= 0 {
-			panic("Clipper: Horizontal Error")
-			self.deleteFromAEL(eMaxPair)
-			self.deleteFromAEL(horzEdge)
-		}
-	}
-}
-
-func (self *Clipper) processHorizontals() {
-	for self.sortedEdges != nil {
-		e := self.sortedEdges
-		self.deleteFromSEL(e)
-		self.processHorizontal(e)
-	}
-}
-
-func (self *Clipper) addJoin(e1, e2 *edge, e1OutIdx, e2OutIdx int) {
-	jr := new(joinRec)
-	if e1OutIdx >= 0 {
-		jr.poly1Idx = e1OutIdx
-	} else {
-		jr.poly1Idx = e1.outIdx
-	}
-	jr.pt1a = e1.Curr
-	jr.pt1b = e1.Top
-	if e2OutIdx >= 0 {
-		jr.poly2Idx = e2OutIdx
-	} else {
-		jr.poly2Idx = e2.outIdx
-	}
-	jr.pt2a = e2.Curr
-	jr.pt2b = e2.Top
-	if self.joinList == nil {
-		self.joinList = make([]*joinRec, 0)
-	}
-	self.joinList = append(self.joinList, jr)
-}
-
-func (self *Clipper) fixupJoinRecs(jr *joinRec, outPt *outPt, startIdx int) {
-	for i := startIdx; i < len(self.joinList); i++ {
-		jr2 := self.joinList[i]
-		if jr2.poly1Idx == jr.poly1Idx && pointIsVertex(jr2.pt1a, outPt) {
-			jr2.poly1Idx = jr.poly2Idx
-		}
-		if jr2.poly2Idx == jr.poly1Idx && pointIsVertex(jr2.pt2a, outPt) {
-			jr2.poly2Idx = jr.poly2Idx
-		}
-	}
-}
-
-func (self *Clipper) addHorzJoin(e *edge, idx int) {
-	hj := newHorzJoin(e, idx)
-	if self.horzJoins == nil {
-		self.horzJoins = hj
-		hj.nextHj = hj
-		hj.prevHj = hj
-	} else {
-		hj.nextHj = self.horzJoins
-		hj.prevHj = self.horzJoins.prevHj
-		self.horzJoins.prevHj.nextHj = hj
-		self.horzJoins.prevHj = hj
-	}
-}
-
-func (self *Clipper) insertIntersectNode(e1, e2 *edge, pt *Point) {
-	newNode := &intersectNode{e1: e1, e2: e2, pt: pt}
-	if self.intersectNodes == nil {
-		self.intersectNodes = newNode
-	} else if newNode.pt.Y > self.intersectNodes.pt.Y {
-		newNode.nextIn = self.intersectNodes
-		self.intersectNodes = newNode
-	} else {
-		node := self.intersectNodes
-		for node.nextIn != nil &&
-			newNode.pt.Y < node.nextIn.pt.Y {
-			node = node.nextIn
-		}
-		newNode.nextIn = node.nextIn
-		node.nextIn = newNode
-	}
-}
-
-func (self *Clipper) processIntersections(botY, topY int) bool {
-	defer func() {
-		self.intersectNodes = nil
-		self.sortedEdges = nil
-	}()
-	self.buildIntersectList(botY, topY)
-	if self.intersectNodes == nil {
-		return true
-	}
-	if self.intersectNodes.nextIn != nil &&
-		!self.fixupIntersectionOrder() {
-		return false
-	}
-	self.processIntersectList()
-	return true
-}
-
-func (self *Clipper) buildIntersectList(botY, topY int) {
-	e := self.activeEdges
-	if e == nil {
-		return
-	}
-	self.sortedEdges = e
-	for e != nil {
-		e.prevInSEL = e.prevInAEL
-		e.nextInSEL = e.nextInAEL
-		e.Curr = &Point{topX(e, topY), e.Curr.Y}
-		e = e.nextInAEL
-	}
+func (c *Clipper) pointInPolygon(pt *IntPoint, op *OutPt) int {
+	//returns 0 if false, +1 if true, -1 if pt ON polygon boundary
+	//See "The Point in Polygon Problem for Arbitrary Polygons" by Hormann & Agathos
+	//http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.88.5498&rep=rep1&type=pdf
+	result := 0
+	startOp := op
+	ptx := pt.X
+	pty := pt.Y
+	poly0x := op.Pt.X
+	poly0y := op.Pt.Y
 	for {
-		isModified := false
-		e = self.sortedEdges
-		for e.nextInSEL != nil {
-			eNext := e.nextInSEL
-			if e.Curr.X <= eNext.Curr.X {
-				e = eNext
-				continue
-			}
-			pt, intersected := intersectPoint(e, eNext)
-			if !intersected && e.Curr.X > eNext.Curr.X+1 {
-				panic("Intersect Error")
-			}
-			if pt.Y > botY {
-				pt = &Point{topX(e, botY), botY}
-			}
-			self.insertIntersectNode(e, eNext, pt)
-			self.swapPositionsInSEL(e, eNext)
-			isModified = true
-		}
-		if e.prevInSEL != nil {
-			e.prevInSEL.nextInSEL = nil
-		} else {
-			break
-		}
-		if !isModified {
-			break
-		}
-	}
-	self.sortedEdges = nil
-	return
-}
+		op = op.Next
+		poly1x := op.Pt.X
+		poly1y := op.Pt.Y
 
-func (self *Clipper) processIntersectList() {
-	for self.intersectNodes != nil {
-		node := self.intersectNodes
-		self.intersectEdges(node.e1, node.e2, node.pt, protectsBoth)
-		self.swapPositionsInAEL(node.e1, node.e2)
-		self.intersectNodes = node.nextIn
-	}
-}
-
-func (self *Clipper) deleteFromAEL(e *edge) {
-	aelPrev := e.prevInAEL
-	aelNext := e.nextInAEL
-	if aelPrev == nil && aelNext == nil && e != self.activeEdges {
-		return
-	}
-	if aelPrev != nil {
-		aelPrev.nextInAEL = aelNext
-	} else {
-		self.activeEdges = aelNext
-	}
-	if aelNext != nil {
-		aelNext.prevInAEL = aelPrev
-	}
-	e.nextInAEL = nil
-	e.prevInAEL = nil
-}
-
-func (self *Clipper) deleteFromSEL(e *edge) {
-	SELPrev := e.prevInSEL
-	SELNext := e.nextInSEL
-	if SELPrev == nil && SELNext == nil && e != self.sortedEdges {
-		return
-	}
-	if SELPrev != nil {
-		SELPrev.nextInSEL = SELNext
-	} else {
-		self.sortedEdges = SELNext
-	}
-	if SELNext != nil {
-		SELNext.prevInSEL = SELPrev
-	}
-	e.nextInSEL = nil
-	e.prevInSEL = nil
-}
-
-func (self *Clipper) intersectEdges(e1, e2 *edge, pt *Point, protect protects) {
-	e1stops := protect&protectsLeft == 0 &&
-		e1.nextInLML == nil &&
-		e1.Top.X == pt.X && e1.Top.Y == pt.Y
-	e2stops := protect&protectsRight == 0 &&
-		e2.nextInLML == nil &&
-		e2.Top.X == pt.X && e2.Top.Y == pt.Y
-	e1Contributing := e1.outIdx >= 0
-	e2contributing := e2.outIdx >= 0
-
-	if e1.polyType == e2.polyType {
-		if self.isEvenOddFillType(e1) {
-			e1Wc := e1.windCnt
-			e1.windCnt = e2.windCnt
-			e2.windCnt = e1Wc
-		} else {
-			if e1.windCnt+e2.windDelta == 0 {
-				e1.windCnt = -e1.windCnt
-			} else {
-				e1.windCnt += e2.windDelta
-			}
-			if e2.windCnt-e1.windDelta == 0 {
-				e2.windCnt = -e2.windCnt
-			} else {
-				e2.windCnt -= e1.windDelta
+		if poly1y == pty {
+			if (poly1x == ptx) || (poly0y == pty &&
+				((poly1x > ptx) == (poly0x < ptx))) {
+				return -1
 			}
 		}
-	} else {
-		if !self.isEvenOddFillType(e2) {
-			e1.windCnt2 += e2.windDelta
-		} else if e1.windCnt2 == 0 {
-			e1.windCnt2 = 1
-		} else {
-			e1.windCnt2 = 0
-		}
-		if !self.isEvenOddFillType(e1) {
-			e2.windCnt2 -= e1.windDelta
-		} else if e2.windCnt2 == 0 {
-			e2.windCnt2 = 1
-		} else {
-			e2.windCnt2 = 0
-		}
-	}
-	var e1FillType, e1FillType2, e2FillType, e2FillType2 PolyFillType
-	if e1.polyType == Subject {
-		e1FillType = self.subjFillType
-		e1FillType2 = self.clipFillType
-	} else {
-		e1FillType = self.clipFillType
-		e1FillType2 = self.subjFillType
-	}
-	if e2.polyType == Subject {
-		e2FillType = self.subjFillType
-		e2FillType2 = self.clipFillType
-	} else {
-		e2FillType = self.clipFillType
-		e2FillType2 = self.subjFillType
-	}
-	var e1Wc, e2Wc int
-	if e1FillType == Positive {
-		e1Wc = e1.windCnt
-	} else if e1FillType == Negative {
-		e1Wc = -e1.windCnt
-	} else {
-		e1Wc = intAbs(e1.windCnt)
-	}
-
-	if e2FillType == Positive {
-		e2Wc = e2.windCnt
-	} else if e2FillType == Negative {
-		e2Wc = -e2.windCnt
-	} else {
-		e2Wc = intAbs(e2.windCnt)
-	}
-
-	if e1Contributing && e2contributing {
-		if e1stops || e2stops ||
-			(e1Wc != 0 && e1Wc != 1) || (e2Wc != 0 && e2Wc != 1) ||
-			(e1.polyType != e2.polyType && self.clipType != Xor) {
-			self.addLocalMaxPoly(e1, e2, pt)
-		} else {
-			self.addOutPt(e1, pt)
-			self.addOutPt(e2, pt)
-			swapSides(e1, e2)
-			swapPolyIndexes(e1, e2)
-		}
-	} else if e1Contributing {
-		if e2Wc == 0 || e2Wc == 1 {
-			self.addOutPt(e1, pt)
-			swapSides(e1, e2)
-			swapPolyIndexes(e1, e2)
-		}
-	} else if e2contributing {
-		if e1Wc == 0 || e1Wc == 1 {
-			self.addOutPt(e2, pt)
-			swapSides(e1, e2)
-			swapPolyIndexes(e1, e2)
-		}
-	} else if (e1Wc == 0 || e1Wc == 1) && (e2Wc == 0 || e2Wc == 1) &&
-		!e1stops && !e2stops {
-
-		e1FillType2, e2FillType2 = EvenOdd, EvenOdd
-		var e1Wc2, e2Wc2 int
-		if e1FillType2 == Positive {
-			e1Wc2 = e1.windCnt2
-		} else if e1FillType2 == Negative {
-			e1Wc2 = -e1.windCnt2
-		} else {
-			e1Wc2 = intAbs(e1.windCnt2)
-		}
-		if e2FillType2 == Positive {
-			e2Wc2 = e2.windCnt2
-		} else if e2FillType2 == Negative {
-			e2Wc2 = -e2.windCnt2
-		} else {
-			e2Wc2 = intAbs(e2.windCnt2)
-		}
-
-		if e1.polyType != e2.polyType {
-			self.addLocalMinPoly(e1, e2, pt)
-		} else if e1Wc == 1 && e2Wc == 1 {
-			if self.clipType == Intersection {
-				if e1Wc2 > 0 && e2Wc2 > 0 {
-					self.addLocalMinPoly(e1, e2, pt)
-				}
-			} else if self.clipType == Union {
-				if e1Wc2 <= 0 && e2Wc2 <= 0 {
-					self.addLocalMinPoly(e1, e2, pt)
-				}
-			} else if self.clipType == Difference {
-				if (e1.polyType == Clip && e1Wc2 > 0 && e2Wc2 > 0) ||
-					(e1.polyType == Subject && e1Wc2 <= 0 && e2Wc2 <= 0) {
-					self.addLocalMinPoly(e1, e2, pt)
-				}
-			} else {
-				self.addLocalMinPoly(e1, e2, pt)
-			}
-		} else {
-			swapSides(e1, e2) //, self.polyOutList)
-		}
-	}
-	if e1stops != e2stops &&
-		((e1stops && e1.outIdx >= 0) || (e2stops && e2.outIdx >= 0)) {
-		swapSides(e1, e2) //, self.polyOutList)
-		swapPolyIndexes(e1, e2)
-	}
-	if e1stops {
-		self.deleteFromAEL(e1)
-	}
-	if e2stops {
-		self.deleteFromAEL(e2)
-	}
-}
-
-func (self *Clipper) doMaxima(e *edge, topY int) {
-	eMaxPair := getMaximaPair(e)
-	x := e.Top.X
-	eNext := e.nextInAEL
-	for eNext != eMaxPair {
-		if eNext == nil {
-			panic("DoMaxima error")
-		}
-		self.intersectEdges(e, eNext, &Point{x, topY}, protectsBoth)
-		self.swapPositionsInAEL(e, eNext)
-		eNext = e.nextInAEL
-	}
-	if e.outIdx < 0 && eMaxPair.outIdx < 0 {
-		self.deleteFromAEL(e)
-		self.deleteFromAEL(eMaxPair)
-	} else if e.outIdx >= 0 && eMaxPair.outIdx >= 0 {
-		self.intersectEdges(e, eMaxPair, &Point{x, topY}, protectsNeither)
-	} else {
-		panic("DoMaxima error")
-	}
-}
-
-func (self *Clipper) updateEdgeIntoAEL(e *edge) *edge {
-	if e.nextInLML == nil {
-		panic("UpdateEdgeIntoAEL error")
-	}
-	aelPrev := e.prevInAEL
-	aelNext := e.nextInAEL
-	e.nextInLML.outIdx = e.outIdx
-	if aelPrev != nil {
-		aelPrev.nextInAEL = e.nextInLML
-	} else {
-		self.activeEdges = e.nextInLML
-	}
-	if aelNext != nil {
-		aelNext.prevInAEL = e.nextInLML
-	}
-	e.nextInLML.side = e.side
-	e.nextInLML.windDelta = e.windDelta
-	e.nextInLML.windCnt = e.windCnt
-	e.nextInLML.windCnt2 = e.windCnt2
-	e = e.nextInLML
-	e.prevInAEL = aelPrev
-	e.nextInAEL = aelNext
-	if e.dx != horizontal {
-		self.insertScanbeam(e.Top.Y)
-	}
-	return e
-}
-
-func (self *Clipper) addLocalMinPoly(e1, e2 *edge, pt *Point) {
-	var e, prevE *edge
-	if e2.dx == horizontal || e1.dx > e2.dx {
-		self.addOutPt(e1, pt)
-		e2.outIdx = e1.outIdx
-		e1.side = leftEdge
-		e2.side = rightEdge
-		e = e1
-		if e.prevInAEL == e2 {
-			prevE = e2.prevInAEL
-		} else {
-			prevE = e1.prevInAEL
-		}
-	} else {
-		self.addOutPt(e2, pt)
-		e1.outIdx = e2.outIdx
-		e1.side = rightEdge
-		e2.side = leftEdge
-		e = e2
-		if e.prevInAEL == e1 {
-			prevE = e1.prevInAEL
-		} else {
-			prevE = e.prevInAEL
-		}
-	}
-	if prevE != nil && prevE.outIdx >= 0 &&
-		topX(prevE, pt.Y) == topX(e, pt.Y) &&
-		slopesEqual2(e, prevE) {
-		self.addJoin(e, prevE, -1, -1)
-	}
-	return
-}
-
-func (self *Clipper) addLocalMaxPoly(e1, e2 *edge, pt *Point) {
-	self.addOutPt(e1, pt)
-	if e1.outIdx == e2.outIdx {
-		e1.outIdx = -1
-		e2.outIdx = -1
-	} else if e1.outIdx < e2.outIdx {
-		self.appendPolygon(e1, e2)
-	} else {
-		self.appendPolygon(e2, e1)
-	}
-}
-
-func (self *Clipper) createOutRec() *outRec {
-	outrec := newOutRec(len(self.polyOutList))
-	self.polyOutList = append(self.polyOutList, outrec)
-	return outrec
-}
-
-func (self *Clipper) addOutPt(e *edge, pt *Point) {
-	toFront := e.side == leftEdge
-	var outrec *outRec
-	if e.outIdx < 0 {
-		outrec = self.createOutRec()
-		e.outIdx = outrec.idx
-		op := newOutPt(outrec.idx, pt)
-		op.nextOp = op
-		op.prevOp = op
-		outrec.pts = op
-		setHoleState(e, outrec, self.polyOutList)
-	} else {
-		outrec = self.polyOutList[e.outIdx]
-		op := outrec.pts
-		if (toFront && pointsEqual(pt, op.pt)) ||
-			(!toFront && pointsEqual(pt, op.prevOp.pt)) {
-			return
-		}
-		op2 := newOutPt(outrec.idx, pt)
-		op2.nextOp = op
-		op2.prevOp = op.prevOp
-		op.prevOp.nextOp = op2
-		op.prevOp = op2
-		if toFront {
-			outrec.pts = op2
-		}
-	}
-}
-
-func (self *Clipper) appendPolygon(e1, e2 *edge) {
-	outRec1 := self.polyOutList[e1.outIdx]
-	outRec2 := self.polyOutList[e2.outIdx]
-	var holeStateRec *outRec
-	if param1RightOfParam2(outRec1, outRec2) {
-		holeStateRec = outRec2
-	} else if param1RightOfParam2(outRec2, outRec1) {
-		holeStateRec = outRec1
-	} else {
-		holeStateRec = getLowermostRec(outRec1, outRec2)
-	}
-
-	p1_lft := outRec1.pts
-	p2_lft := outRec2.pts
-	p1_rt := p1_lft.prevOp
-	p2_rt := p2_lft.prevOp
-	newSide := leftEdge
-
-	if e1.side == leftEdge {
-		if e2.side == leftEdge {
-			// z y x a b c
-			reversePolyPtLinks(p2_lft)
-			p2_lft.nextOp = p1_lft
-			p1_lft.prevOp = p2_lft
-			p1_rt.nextOp = p2_rt
-			p2_rt.prevOp = p1_rt
-			outRec1.pts = p2_rt
-		} else {
-			// x y z a b c
-			p2_rt.nextOp = p1_lft
-			p1_lft.prevOp = p2_rt
-			p2_lft.prevOp = p1_rt
-			p1_rt.nextOp = p2_lft
-			outRec1.pts = p2_lft
-		}
-	} else {
-		newSide = rightEdge
-		if e2.side == rightEdge {
-			// a b c z y x
-			reversePolyPtLinks(p2_lft)
-			p1_rt.nextOp = p2_rt
-			p2_rt.prevOp = p1_rt
-			p2_lft.nextOp = p1_lft
-			p1_lft.prevOp = p2_lft
-		} else {
-			// a b c x y z
-			p1_rt.nextOp = p2_lft
-			p2_lft.prevOp = p1_rt
-			p1_lft.prevOp = p2_rt
-			p2_rt.nextOp = p1_lft
-		}
-	}
-	outRec1.bottomPt = nil
-	if holeStateRec == outRec2 {
-		if outRec2.FirstLeft != outRec1 {
-			outRec1.FirstLeft = outRec2.FirstLeft
-		}
-		outRec1.isHole = outRec2.isHole
-	}
-	outRec2.pts = nil
-	outRec2.bottomPt = nil
-	outRec2.FirstLeft = outRec1
-	OKIdx := outRec1.idx
-	ObsoleteIdx := outRec2.idx
-
-	e1.outIdx = -1
-	e2.outIdx = -1
-
-	e := self.activeEdges
-	for e != nil {
-		if e.outIdx == ObsoleteIdx {
-			e.outIdx = OKIdx
-			e.side = newSide
-			break
-		}
-		e = e.nextInAEL
-	}
-	outRec2.idx = outRec1.idx
-}
-
-func (self *Clipper) fixupIntersectionOrder() bool {
-	self.copyAELToSEL()
-	inode := self.intersectNodes
-	for inode != nil {
-		if !edgesAdjacent(inode) {
-			nextNode := inode.nextIn
-			for nextNode != nil && !edgesAdjacent(nextNode) {
-				nextNode = nextNode.nextIn
-			}
-			if nextNode == nil {
-				return false
-			}
-			e1 := inode.e1
-			e2 := inode.e2
-			p := inode.pt
-			inode.e1 = nextNode.e1
-			inode.e2 = nextNode.e2
-			inode.pt = nextNode.pt
-			nextNode.e1 = e1
-			nextNode.e2 = e2
-			nextNode.pt = p
-		}
-		self.swapPositionsInSEL(inode.e1, inode.e2)
-		inode = inode.nextIn
-	}
-	return true
-}
-
-func (self *Clipper) processEdgesAtTopOfScanbeam(topY int) {
-	e := self.activeEdges
-	var ePrev, eNext *edge
-	for e != nil {
-		if isMaxima(e, topY) && getMaximaPair(e).dx != horizontal {
-			ePrev = e.prevInAEL
-			self.doMaxima(e, topY)
-			if ePrev == nil {
-				e = self.activeEdges
-			} else {
-				e = ePrev.nextInAEL
-			}
-		} else {
-			intermediateVert := isIntermediate(e, topY)
-			if intermediateVert && e.nextInLML.dx == horizontal {
-				if e.outIdx >= 0 {
-					self.addOutPt(e, e.Top)
-					hj := self.horzJoins
-					if hj != nil {
-						for {
-							_, _, overlap := getOverlapSegment(
-								hj.edge.Bot, hj.edge.Top, e.nextInLML.Bot, e.nextInLML.Top)
-							if overlap {
-								self.addJoin(hj.edge, e.nextInLML, hj.savedIdx, e.outIdx)
-							}
-							hj = hj.nextHj
-						}
-						if hj == self.horzJoins {
-							break
-						}
-						self.addHorzJoin(e.nextInLML, e.outIdx)
+		if (poly0y < pty) != (poly1y < pty) {
+			if poly0x >= ptx {
+				if poly1x > ptx {
+					result = 1 - result
+				} else {
+					d := float64(poly0x-ptx)*float64(poly1y-pty) -
+						float64(poly1x-ptx)*float64(poly0y-pty)
+					if d == 0 {
+						return -1
+					}
+					if (d > 0) == (poly1y > poly0y) {
+						result = 1 - result
 					}
 				}
-				e = self.updateEdgeIntoAEL(e)
-				self.addEdgeToSEL(e)
 			} else {
-				e.Curr = &Point{topX(e, topY), topY}
-				if self.ForceSimple && e.prevInAEL != nil &&
-					e.prevInAEL.Curr.X == e.Curr.X &&
-					e.outIdx >= 0 && e.prevInAEL.outIdx >= 0 {
-					if intermediateVert {
-						self.addOutPt(e.prevInAEL, &Point{e.Curr.X, topY})
-					} else {
-						self.addOutPt(e, &Point{e.Curr.X, topY})
+				if poly1x > ptx {
+					d := float64(poly0x-ptx)*float64(poly1y-pty) -
+						float64(poly1x-ptx)*float64(poly0y-pty)
+					if d == 0 {
+						return -1
+					}
+					if (d > 0) == (poly1y > poly0y) {
+						result = 1 - result
 					}
 				}
 			}
-			e = e.nextInAEL
 		}
-	}
-	self.processHorizontals()
-
-	e = self.activeEdges
-	for e != nil {
-		if isIntermediate(e, topY) {
-			if e.outIdx >= 0 {
-				self.addOutPt(e, e.Top)
-			}
-			e = self.updateEdgeIntoAEL(e)
-
-			ePrev = e.prevInAEL
-			eNext = e.nextInAEL
-			if ePrev != nil && ePrev.Curr.X == e.Bot.X &&
-				(ePrev.Curr.Y == e.Bot.Y) && (e.outIdx >= 0) &&
-				(ePrev.outIdx >= 0) && (ePrev.Curr.Y > ePrev.Top.Y) &&
-				slopesEqual2(e, ePrev) {
-				self.addOutPt(ePrev, e.Bot)
-				self.addJoin(e, ePrev, -1, -1)
-			} else if eNext != nil && (eNext.Curr.X == e.Bot.X) &&
-				(eNext.Curr.Y == e.Bot.Y) && (e.outIdx >= 0) &&
-				(eNext.outIdx >= 0) && (eNext.Curr.Y > eNext.Top.Y) &&
-				slopesEqual2(e, eNext) {
-				self.addOutPt(eNext, e.Bot)
-				self.addJoin(e, eNext, -1, -1)
-			}
-		}
-		e = e.nextInAEL
-	}
-}
-
-// see http://www.mathopenref.com/coordpolygonarea2.html
-func (self *Clipper) area(pts *outPt) float64 {
-	result := 0.0
-	p := pts
-	for {
-		result += float64((p.pt.X + p.prevOp.pt.X) * (p.prevOp.pt.Y - p.pt.Y))
-		p = p.nextOp
-		if p == pts {
+		poly0x = poly1x
+		poly0y = poly1y
+		if startOp == op {
 			break
 		}
 	}
-	return result / 2.
+	return result
 }
 
-func (self *Clipper) joinPoints(jr *joinRec) (*outPt, *outPt, bool) {
-	var p1, p2, p3, p4 *outPt
-	var result bool
-	outRec1 := self.polyOutList[jr.poly1Idx]
-	outRec2 := self.polyOutList[jr.poly2Idx]
-	if outRec1 == nil || outRec2 == nil {
-		return p1, p2, false
-	}
-	pp1a := outRec1.pts
-	pp2a := outRec2.pts
-	pt1 := jr.pt2a
-	pt2 := jr.pt2b
-	pt3 := jr.pt1a
-	pt4 := jr.pt1b
-	pp1a, pt1, pt2, result = findSegment(pp1a, pt1, pt2)
-	if !result {
-		return p1, p2, false
-	}
-	if outRec1 == outRec2 {
-		pp2a = pp1a.nextOp
-		pp2a, pt3, pt4, result = findSegment(pp2a, pt3, pt4)
-		if !result || pp2a == pp1a {
-			return p1, p2, false
+//------------------------------------------------------------------------------
+
+func (c *Clipper) Poly2ContainsPoly1(outPt1, outPt2 *OutPt) bool {
+	op := outPt1
+	for {
+		res := c.pointInPolygon(op.Pt, outPt2)
+		if res >= 0 {
+			return res != 0
 		}
-	} else {
-		pp2a, pt3, pt4, result = findSegment(pp2a, pt3, pt4)
-		if !result {
-			return p1, p2, false
+		op = op.Next
+		if op == outPt1 {
+			break
 		}
 	}
-	pt1, pt2, result = getOverlapSegment(pt1, pt2, pt3, pt4)
-	if !result {
-		return p1, p2, false
-	}
-
-	prevOp := pp1a.prevOp
-	if pointsEqual(pp1a.pt, pt1) {
-		p1 = pp1a
-	} else if pointsEqual(prevOp.pt, pt1) {
-		p1 = prevOp
-	} else {
-		p1 = insertPolyPtBetween(pp1a, prevOp, pt1)
-	}
-
-	if pointsEqual(pp1a.pt, pt2) {
-		p2 = pp1a
-	} else if pointsEqual(prevOp.pt, pt2) {
-		p2 = prevOp
-	} else if (p1 == pp1a) || (p1 == prevOp) {
-		p2 = insertPolyPtBetween(pp1a, prevOp, pt2)
-	} else if pt3IsBetweenPt1AndPt2(pp1a.pt, p1.pt, pt2) {
-		p2 = insertPolyPtBetween(pp1a, p1, pt2)
-	} else {
-		p2 = insertPolyPtBetween(p1, prevOp, pt2)
-	}
-
-	prevOp = pp2a.prevOp
-	if pointsEqual(pp2a.pt, pt1) {
-		p3 = pp2a
-	} else if pointsEqual(prevOp.pt, pt1) {
-		p3 = prevOp
-	} else {
-		p3 = insertPolyPtBetween(pp2a, prevOp, pt1)
-	}
-	if pointsEqual(pp2a.pt, pt2) {
-		p4 = pp2a
-	} else if pointsEqual(prevOp.pt, pt2) {
-		p4 = prevOp
-	} else if (p3 == pp2a) || (p3 == prevOp) {
-		p4 = insertPolyPtBetween(pp2a, prevOp, pt2)
-	} else if pt3IsBetweenPt1AndPt2(pp2a.pt, p3.pt, pt2) {
-		p4 = insertPolyPtBetween(pp2a, p3, pt2)
-	} else {
-		p4 = insertPolyPtBetween(p3, prevOp, pt2)
-	}
-
-	if p1.nextOp == p2 && p3.prevOp == p4 {
-		p1.nextOp = p3
-		p3.prevOp = p1
-		p2.prevOp = p4
-		p4.nextOp = p2
-		return p1, p2, true
-	} else if p1.prevOp == p2 && p3.nextOp == p4 {
-		p1.prevOp = p3
-		p3.nextOp = p1
-		p2.nextOp = p4
-		p4.prevOp = p2
-		return p1, p2, true
-	}
-	return p1, p2, false
+	return true
 }
 
-func (self *Clipper) fixupFirstLefts1(oldOutRec, newOutRec *outRec) {
-	for _, outRec := range self.polyOutList {
-		if outRec.pts != nil && outRec.FirstLeft == oldOutRec {
-			if poly2ContainsPoly1(outRec.pts, newOutRec.pts) {
-				outRec.FirstLeft = newOutRec
+//----------------------------------------------------------------------
+
+func (c *Clipper) FixupFirstLefts1(OldOutRec, NewOutRec *OutRec) {
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		outRec := c.m_PolyOuts[i]
+		if outRec.Pts != nil && outRec.FirstLeft == OldOutRec {
+			if c.Poly2ContainsPoly1(outRec.Pts, NewOutRec.Pts) {
+				outRec.FirstLeft = NewOutRec
 			}
 		}
 	}
 }
 
-func (self *Clipper) fixupFirstLefts2(oldOutRec, newOutRec *outRec) {
-	for _, outRec := range self.polyOutList {
-		if outRec.FirstLeft == oldOutRec {
-			outRec.FirstLeft = newOutRec
+//----------------------------------------------------------------------
+
+func (c *Clipper) FixupFirstLefts2(OldOutRec, NewOutRec *OutRec) {
+	for _, outRec := range c.m_PolyOuts {
+		if outRec.FirstLeft == OldOutRec {
+			outRec.FirstLeft = NewOutRec
 		}
 	}
 }
 
-func (self *Clipper) getOutRec(idx int) *outRec {
-	outrec := self.polyOutList[idx]
-	for outrec != self.polyOutList[outrec.idx] {
-		outrec = self.polyOutList[outrec.idx]
+//----------------------------------------------------------------------
+
+func (c *Clipper) ParseFirstLeft(FirstLeft *OutRec) *OutRec {
+	for FirstLeft != nil && FirstLeft.Pts == nil {
+		FirstLeft = FirstLeft.FirstLeft
 	}
-	return outrec
+	return FirstLeft
 }
 
-func (self *Clipper) joinCommonEdges() {
-	for i := 0; i < len(self.joinList); i++ {
-		jr := self.joinList[i]
-		outRec1 := self.getOutRec(jr.poly1Idx)
-		outRec2 := self.getOutRec(jr.poly2Idx)
-		if outRec1.pts == nil || outRec2.pts == nil {
+//------------------------------------------------------------------------------
+
+func (c *Clipper) JoinCommonEdges() {
+	for i := 0; i < len(c.m_Joins); i++ {
+		join := c.m_Joins[i]
+
+		outRec1 := c.GetOutRec(join.OutPt1.Idx)
+		outRec2 := c.GetOutRec(join.OutPt2.Idx)
+
+		if outRec1.Pts == nil || outRec2.Pts == nil {
 			continue
 		}
 
-		var holeStateRec *outRec
+		//get the polygon fragment with the correct hole state (FirstLeft)
+		//before calling JoinPoints() ...
+		var holeStateRec *OutRec
 		if outRec1 == outRec2 {
 			holeStateRec = outRec1
-		} else if param1RightOfParam2(outRec1, outRec2) {
+		} else if c.Param1RightOfParam2(outRec1, outRec2) {
 			holeStateRec = outRec2
-		} else if param1RightOfParam2(outRec2, outRec1) {
+		} else if c.Param1RightOfParam2(outRec2, outRec1) {
 			holeStateRec = outRec1
 		} else {
-			holeStateRec = getLowermostRec(outRec1, outRec2)
+			holeStateRec = c.GetLowermostRec(outRec1, outRec2)
 		}
 
-		p1, p2, result := self.joinPoints(jr)
-		if !result {
+		if !c.JoinPoints(join, outRec1, outRec2) {
 			continue
 		}
 
 		if outRec1 == outRec2 {
-			outRec1.pts = p1
-			outRec1.bottomPt = nil
-			outRec2 = self.createOutRec()
-			outRec2.pts = p2
-			jr.poly2Idx = outRec2.idx
+			//instead of joining two polygons, we've just created a new one by
+			//splitting one polygon into two.
+			outRec1.Pts = join.OutPt1
+			outRec1.BottomPt = nil
+			outRec2 = c.CreateOutRec()
+			outRec2.Pts = join.OutPt2
 
-			if poly2ContainsPoly1(outRec2.pts, outRec1.pts) {
-				outRec2.isHole = !outRec1.isHole
+			//update all OutRec2.Pts Idx's ...
+			c.UpdateOutPtIdxs(outRec2)
+
+			//We now need to check every OutRec.FirstLeft pointer. If it points
+			//to OutRec1 it may need to point to OutRec2 instead ...
+			if c.m_UsingPolyTree {
+				for j := 0; j < len(c.m_PolyOuts)-1; j++ {
+					oRec := c.m_PolyOuts[j]
+					if oRec.Pts == nil || c.ParseFirstLeft(oRec.FirstLeft) != outRec1 ||
+						oRec.IsHole == outRec1.IsHole {
+						continue
+					}
+					if c.Poly2ContainsPoly1(oRec.Pts, join.OutPt2) {
+						oRec.FirstLeft = outRec2
+					}
+				}
+			}
+
+			if c.Poly2ContainsPoly1(outRec2.Pts, outRec1.Pts) {
+				//outRec2 is contained by outRec1 ...
+				outRec2.IsHole = !outRec1.IsHole
 				outRec2.FirstLeft = outRec1
 
-				self.fixupJoinRecs(jr, p2, i+1)
-
-				if self.usingPolyTree {
-					self.fixupFirstLefts2(outRec2, outRec1)
+				//fixup FirstLeft pointers that may need reassigning to OutRec1
+				if c.m_UsingPolyTree {
+					c.FixupFirstLefts2(outRec2, outRec1)
 				}
 
-				fixupOutPolygon(outRec1)
-				fixupOutPolygon(outRec2)
-
-				if (outRec2.isHole != self.ReverseSolution) ==
-					(self.area(outRec2.pts) > 0.0) {
-					reversePolyPtLinks(outRec2.pts)
+				if (outRec2.IsHole != c.ReverseSolution) == (c.area(outRec2) > 0) {
+					c.ReversePolyPtLinks(outRec2.Pts)
 				}
 
-			} else if poly2ContainsPoly1(outRec1.pts, outRec2.pts) {
-				outRec2.isHole = outRec1.isHole
-				outRec1.isHole = !outRec2.isHole
+			} else if c.Poly2ContainsPoly1(outRec1.Pts, outRec2.Pts) {
+				//outRec1 is contained by outRec2 ...
+				outRec2.IsHole = outRec1.IsHole
+				outRec1.IsHole = !outRec2.IsHole
 				outRec2.FirstLeft = outRec1.FirstLeft
 				outRec1.FirstLeft = outRec2
 
-				self.fixupJoinRecs(jr, p2, i+1)
-
-				if self.usingPolyTree {
-					self.fixupFirstLefts2(outRec1, outRec2)
+				//fixup FirstLeft pointers that may need reassigning to OutRec1
+				if c.m_UsingPolyTree {
+					c.FixupFirstLefts2(outRec1, outRec2)
 				}
 
-				fixupOutPolygon(outRec1)
-				fixupOutPolygon(outRec2)
-
-				if (outRec1.isHole != self.ReverseSolution) ==
-					(self.area(outRec1.pts) > 0.0) {
-					reversePolyPtLinks(outRec1.pts)
+				if (outRec1.IsHole != c.ReverseSolution) == (c.area(outRec1) > 0) {
+					c.ReversePolyPtLinks(outRec1.Pts)
 				}
 			} else {
-				outRec2.isHole = outRec1.isHole
+				//the 2 polygons are completely separate ...
+				outRec2.IsHole = outRec1.IsHole
 				outRec2.FirstLeft = outRec1.FirstLeft
 
-				self.fixupJoinRecs(jr, p2, i+1)
-				if self.usingPolyTree {
-					self.fixupFirstLefts1(outRec1, outRec2)
+				//fixup FirstLeft pointers that may need reassigning to OutRec2
+				if c.m_UsingPolyTree {
+					c.FixupFirstLefts1(outRec1, outRec2)
 				}
-
-				fixupOutPolygon(outRec1)
-				fixupOutPolygon(outRec2)
 			}
-		} else {
-			fixupOutPolygon(outRec1)
-			outRec2.pts = nil
-			outRec2.bottomPt = nil
-			outRec2.idx = outRec1.idx
 
-			outRec1.isHole = holeStateRec.isHole
+		} else {
+			//joined 2 polygons together ...
+
+			outRec2.Pts = nil
+			outRec2.BottomPt = nil
+			outRec2.Idx = outRec1.Idx
+
+			outRec1.IsHole = holeStateRec.IsHole
 			if holeStateRec == outRec2 {
 				outRec1.FirstLeft = outRec2.FirstLeft
 			}
 			outRec2.FirstLeft = outRec1
 
-			if self.usingPolyTree {
-				self.fixupFirstLefts2(outRec2, outRec1)
+			//fixup FirstLeft pointers that may need reassigning to OutRec1
+			if c.m_UsingPolyTree {
+				c.FixupFirstLefts2(outRec2, outRec1)
 			}
 		}
 	}
-	return
 }
 
-func (self *Clipper) doSimplePolygons() {
-	i := 0
-	for i < len(self.polyOutList) {
-		outrec := self.polyOutList[i]
-		i += 1
-		op := outrec.pts
+//------------------------------------------------------------------------------
+
+func (c *Clipper) UpdateOutPtIdxs(outrec *OutRec) {
+	op := outrec.Pts
+	for {
+		op.Idx = outrec.Idx
+		op = op.Prev
+		if op == outrec.Pts {
+			break
+		}
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DoSimplePolygons() {
+	for i := 0; i < len(c.m_PolyOuts); i++ {
+		outrec := c.m_PolyOuts[i]
+		op := outrec.Pts
 		if op == nil {
 			continue
 		}
-		for {
-			op2 := op.nextOp
-			for op2 != outrec.pts {
-				if pointsEqual(op.pt, op2.pt) && op2.nextOp != op && op2.prevOp != op {
+		for { //for each Pt in Polygon until duplicate found do ...
+			op2 := op.Next
+			for op2 != outrec.Pts {
+				if (op.Pt == op2.Pt) && op2.Next != op && op2.Prev != op {
 					//split the polygon into two ...
-					op3 := op.prevOp
-					op4 := op2.prevOp
-					op.prevOp = op4
-					op4.nextOp = op
-					op2.prevOp = op3
-					op3.nextOp = op2
+					op3 := op.Prev
+					op4 := op2.Prev
+					op.Prev = op4
+					op4.Next = op
+					op2.Prev = op3
+					op3.Next = op2
 
-					outrec.pts = op
-					outrec2 := self.createOutRec()
-					outrec2.pts = op2
-					updateOutPtIdxs(outrec2)
-					if poly2ContainsPoly1(outrec2.pts, outrec.pts) {
+					outrec.Pts = op
+					outrec2 := c.CreateOutRec()
+					outrec2.Pts = op2
+					c.UpdateOutPtIdxs(outrec2)
+					if c.Poly2ContainsPoly1(outrec2.Pts, outrec.Pts) {
 						//OutRec2 is contained by OutRec1 ...
-						outrec2.isHole = !outrec.isHole
+						outrec2.IsHole = !outrec.IsHole
 						outrec2.FirstLeft = outrec
-					} else if poly2ContainsPoly1(outrec.pts, outrec2.pts) {
-						//OutRec1 is contained by OutRec2 ...
-						outrec2.isHole = outrec.isHole
-						outrec.isHole = !outrec2.isHole
-						outrec2.FirstLeft = outrec.FirstLeft
-						outrec.FirstLeft = outrec2
 					} else {
-						//the 2 polygons are separate ...
-						outrec2.isHole = outrec.isHole
-						outrec2.FirstLeft = outrec.FirstLeft
+						if c.Poly2ContainsPoly1(outrec.Pts, outrec2.Pts) {
+							//OutRec1 is contained by OutRec2 ...
+							outrec2.IsHole = outrec.IsHole
+							outrec.IsHole = !outrec2.IsHole
+							outrec2.FirstLeft = outrec.FirstLeft
+							outrec.FirstLeft = outrec2
+						} else {
+							//the 2 polygons are separate ...
+							outrec2.IsHole = outrec.IsHole
+							outrec2.FirstLeft = outrec.FirstLeft
+						}
 					}
-					op2 = op // ie get ready for the next iteration
+					op2 = op //ie get ready for the next iteration
 				}
-				op2 = op2.nextOp
+				op2 = op2.Next
 			}
-			op = op.nextOp
-			if op == outrec.pts {
+			op = op.Next
+			if op == outrec.Pts {
 				break
 			}
 		}
 	}
-	return
 }
 
-func (self *Clipper) executeInternal() bool {
-	defer func() {
-		self.joinList = nil
-		self.horzJoins = nil
-	}()
-	self.reset()
-	if self.scanbeam == nil {
-		return true
+//------------------------------------------------------------------------------
+
+func Area(poly Path) float64 {
+	cnt := len(poly)
+	if cnt < 3 {
+		return 0
 	}
-	botY := self.popScanbeam()
+	a := float64(0)
+	j := cnt - 1
+	for i := 0; i < cnt; i++ {
+		a += (float64(poly[j].X) + float64(poly[i].X)) *
+			(float64(poly[j].Y - poly[i].Y))
+		j = i
+	}
+	return -a * 0.5
+}
+
+func AreaCombined(polygons Paths) float64 {
+	a := 0.
+	for _, polygon := range polygons {
+		a += Area(polygon)
+	}
+	return a
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) area(outRec *OutRec) float64 {
+	op := outRec.Pts
+	if op == nil {
+		return 0
+	}
+	a := float64(0)
 	for {
-		self.insertLocalMinimaIntoAEL(botY)
-		self.horzJoins = nil
-		self.processHorizontals()
-		topY := self.popScanbeam()
-		if !self.processIntersections(botY, topY) {
-			return false
-		}
-		self.processEdgesAtTopOfScanbeam(topY)
-		botY = topY
-		if self.scanbeam == nil && self.currentLocMin == nil {
+		a = a + float64(op.Prev.Pt.X+op.Pt.X)*float64(op.Prev.Pt.Y-op.Pt.Y)
+		op = op.Next
+		if op == outRec.Pts {
 			break
 		}
 	}
-
-	for _, outRec := range self.polyOutList {
-		if outRec.pts == nil {
-			continue
-		}
-		fixupOutPolygon(outRec)
-		if outRec.pts == nil {
-			continue
-		}
-		if (outRec.isHole != self.ReverseSolution) == (self.area(outRec.pts) > 0.0) {
-			reversePolyPtLinks(outRec.pts)
-		}
-	}
-	if self.joinList != nil {
-		self.joinCommonEdges()
-	}
-	if self.ForceSimple {
-		self.doSimplePolygons()
-	}
-	return true
+	return a * 0.5
 }
 
-func (self *Clipper) Execute(
-	clipType ClipType,
-	subjFillType,
-	clipFillType PolyFillType) ([][]*Point, bool) {
-	var solution [][]*Point
-	if self.executeLocked {
-		return solution, false
-	}
-	defer func() {
-		self.executeLocked = false
-		self.usingPolyTree = false
-	}()
-
-	self.executeLocked = true
-	self.usingPolyTree = true
-	self.subjFillType = subjFillType
-	self.clipFillType = clipFillType
-	self.clipType = clipType
-	result := self.executeInternal()
-	if result {
-		solution = self.buildResult()
-	}
-	return solution, result
+//------------------------------------------------------------------------------
+// SimplifyPolygon functions ...
+// Convert self-intersecting polygons into simple polygons
+//------------------------------------------------------------------------------
+// default fillType = pftEvenOdd
+func (c *Clipper) SimplifyPolygon(poly Path,
+	fillType PolyFillType) Paths {
+	var result Paths
+	c2 := NewClipper(ioNone)
+	c2.StrictlySimple = true
+	c2.AddPath(poly, ptSubject, true)
+	result, _ = c2.Execute1(ctUnion, fillType, fillType)
+	return result
 }
 
-func (self *Clipper) Execute2(
-	clipType ClipType,
-	solutionTree *PolyTree,
-	subjFillType,
-	clipFillType PolyFillType) bool {
-	if self.executeLocked {
-		return false
+//------------------------------------------------------------------------------
+
+// default fillType = pftEvenOdd
+func (c *Clipper) SimplifyPolygons(polys Paths,
+	fillType PolyFillType) Paths {
+	var result Paths
+	c2 := NewClipper(ioNone)
+	c2.StrictlySimple = true
+	c2.AddPaths(polys, ptSubject, true)
+	result, _ = c2.Execute1(ctUnion, fillType, fillType)
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DistanceSqrd(pt1, pt2 *IntPoint) float64 {
+	dx := float64(pt1.X - pt2.X)
+	dy := float64(pt1.Y - pt2.Y)
+	return (dx*dx + dy*dy)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) DistanceFromLineSqrd(pt, ln1, ln2 *IntPoint) float64 {
+	//The equation of a line in general form (Ax + By + C = 0)
+	//given 2 points (x¹,y¹) & (x²,y²) is ...
+	//(y¹ - y²)x + (x² - x¹)y + (y² - y¹)x¹ - (x² - x¹)y¹ = 0
+	//A = (y¹ - y²); B = (x² - x¹); C = (y² - y¹)x¹ - (x² - x¹)y¹
+	//perpendicular distance of point (x³,y³) = (Ax³ + By³ + C)/Sqrt(A² + B²)
+	//see http://en.wikipedia.org/wiki/Perpendicular_distance
+	A := float64(ln1.Y - ln2.Y)
+	B := float64(ln2.X - ln1.X)
+	C := A*float64(ln1.X) + B*float64(ln1.Y)
+	C = A*float64(pt.X) + B*float64(pt.Y) - C
+	return (C * C) / (A*A + B*B)
+}
+
+//---------------------------------------------------------------------------
+
+func (c *Clipper) SlopesNearCollinear(pt1,
+	pt2, pt3 *IntPoint, distSqrd float64) bool {
+	return c.DistanceFromLineSqrd(pt2, pt1, pt3) < distSqrd
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) PointsAreClose(pt1, pt2 *IntPoint, distSqrd float64) bool {
+	dx := float64(pt1.X - pt2.X)
+	dy := float64(pt1.Y - pt2.Y)
+	return ((dx*dx)+(dy*dy) <= distSqrd)
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ExcludeOp(op *OutPt) *OutPt {
+	result := op.Prev
+	result.Next = op.Next
+	op.Next.Prev = result
+	result.Idx = 0
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+//distance = proximity in units/pixels below which vertices will be stripped.
+//Default ~= sqrt(2) so when adjacent vertices or semi-adjacent vertices have
+//both x & y coords within 1 unit, then the second vertex will be stripped.
+// default distance=1.415
+func (c *Clipper) CleanPolygon(path Path, distance float64) Path {
+
+	cnt := len(path)
+
+	if cnt == 0 {
+		return NewPath()
 	}
-	defer func() {
-		self.executeLocked = false
-		self.usingPolyTree = false
-	}()
-	self.executeLocked = true
-	self.usingPolyTree = true
-	solutionTree.Clear()
-	self.subjFillType = subjFillType
-	self.clipFillType = clipFillType
-	self.clipType = clipType
-	result := self.executeInternal()
-	if result {
-		self.buildResult2(solutionTree)
+
+	outPts := make([]*OutPt, cnt)
+	for i := 0; i < cnt; i++ {
+		outPts[i] = new(OutPt)
+	}
+
+	for i := 0; i < cnt; i++ {
+		outPts[i].Pt = path[i]
+		outPts[i].Next = outPts[(i+1)%cnt]
+		outPts[i].Next.Prev = outPts[i]
+		outPts[i].Idx = 0
+	}
+
+	distSqrd := distance * distance
+	op := outPts[0]
+	for op.Idx == 0 && op.Next != op.Prev {
+		if c.PointsAreClose(op.Pt, op.Prev.Pt, distSqrd) {
+			op = c.ExcludeOp(op)
+			cnt--
+		} else if c.PointsAreClose(op.Prev.Pt, op.Next.Pt, distSqrd) {
+			c.ExcludeOp(op.Next)
+			op = c.ExcludeOp(op)
+			cnt -= 2
+		} else if c.SlopesNearCollinear(op.Prev.Pt, op.Pt, op.Next.Pt, distSqrd) {
+			op = c.ExcludeOp(op)
+			cnt--
+		} else {
+			op.Idx = 1
+			op = op.Next
+		}
+	}
+
+	if cnt < 3 {
+		cnt = 0
+	}
+	result := Path(make([]*IntPoint, cnt))
+	for i := 0; i < cnt; i++ {
+		result[i] = op.Pt
+		op = op.Next
+	}
+	outPts = nil
+	return result
+}
+
+//------------------------------------------------------------------------------
+// default distance = 1.415
+func (c *Clipper) CleanPolygons(polys Paths,
+	distance float64) Paths {
+	result := Paths(make([]Path, len(polys)))
+	for i := 0; i < len(polys); i++ {
+		result[i] = c.CleanPolygon(polys[i], distance)
 	}
 	return result
 }
 
-func (self *Clipper) buildResult() [][]*Point {
-	polygons := make([][]*Point, 0)
-	for _, outRec := range self.polyOutList {
-		if outRec == nil {
-			continue
-		}
-		cnt := pointCount(outRec.pts)
-		if cnt < 3 {
-			continue
-		}
-		poly := make([]*Point, 0)
-		op := outRec.pts
-		for i := 0; i < cnt; i++ {
-			poly = append(poly, op.pt)
-			op = op.prevOp
-		}
-		polygons = append(polygons, poly)
+//------------------------------------------------------------------------------
+
+func (c *Clipper) Minkowski(pattern, path Path, IsSum, IsClosed bool) Paths {
+	var delta int
+	if IsClosed {
+		delta = 1
+	} else {
+		delta = 0
 	}
-	return polygons
-}
-
-func (self *Clipper) buildResult2(polyTree *PolyTree) {
-	for _, outRec := range self.polyOutList {
-		if outRec == nil {
-			continue
+	polyCnt := len(pattern)
+	pathCnt := len(path)
+	result := Paths(make([]Path, pathCnt))
+	if IsSum {
+		for i := 0; i < pathCnt; i++ {
+			result[i] = make([]*IntPoint, polyCnt)
+			for j, ip := range pattern {
+				result[i][j] = &IntPoint{path[i].X + ip.X, path[i].Y + ip.Y}
+			}
 		}
-		cnt := pointCount(outRec.pts)
-		if cnt < 3 {
-			continue
-		}
-		fixHoleLinkage(outRec)
-
-		// add nodes to allNodes list ...
-		polyNode := new(PolyNode)
-		polyTree.allNodes = append(polyTree.allNodes, polyNode)
-		outRec.polyNode = polyNode
-		op := outRec.pts
-		for {
-			polyNode.Contour = append(polyNode.Contour, op.pt)
-			op = op.prevOp
-			if op == outRec.pts {
-				break
+	} else {
+		for i := 0; i < pathCnt; i++ {
+			result[i] = make([]*IntPoint, polyCnt)
+			for j, ip := range pattern {
+				result[i][j] = &IntPoint{path[i].X - ip.X, path[i].Y - ip.Y}
 			}
 		}
 	}
-	// build the tree ...
-	for _, outRec := range self.polyOutList {
-		if outRec.polyNode == nil {
-			continue
-		}
-		if outRec.FirstLeft == nil {
-			polyTree.addChild(outRec.polyNode)
-		} else {
-			outRec.FirstLeft.polyNode.addChild(outRec.polyNode)
+
+	quads := Paths(make([]Path, 0, (pathCnt+delta)*(polyCnt+1)))
+	for i := 0; i < pathCnt-1+delta; i++ {
+		for j := 0; j < polyCnt; j++ {
+			quad := Path(make([]*IntPoint, 4))
+			quad[0] = result[i%pathCnt][j%polyCnt]
+			quad[1] = result[(i+1)%pathCnt][j%polyCnt]
+			quad[2] = result[(i+1)%pathCnt][(j+1)%polyCnt]
+			quad[3] = result[i%pathCnt][(j+1)%polyCnt]
+			if !Orientation(quad) {
+				reversePath(quad)
+			}
+			quads = append(quads, quad)
 		}
 	}
-	return
+	return quads
 }
 
-//===============================================================================
-// OffsetPolygons (+ ancilliary functions)
-//===============================================================================
+//------------------------------------------------------------------------------
 
-func getUnitNormal(pt1, pt2 *Point) *FloatPoint {
-	if pt2.X == pt1.X && pt2.Y == pt1.Y {
-		return &FloatPoint{0.0, 0.0}
+func (c *Clipper) MinkowskiSum(pattern, path Path, pathIsClosed bool) Paths {
+	paths := c.Minkowski(pattern, path, true, pathIsClosed)
+	c2 := NewClipper(ioNone)
+	c2.AddPaths(paths, ptSubject, true)
+	paths, _ = c2.Execute1(ctUnion, pftNonZero, pftNonZero)
+	return paths
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) TranslatePath(path Path, delta *IntPoint) Path {
+	outPath := Path(make([]*IntPoint, len(path)))
+	for i := 0; i < len(path); i++ {
+		outPath[i] = &IntPoint{path[i].X + delta.X, path[i].Y + delta.Y}
 	}
-	dx := float64(pt2.X - pt1.X)
-	dy := float64(pt2.Y - pt1.Y)
-	f := 1.0 / math.Hypot(dx, dy)
-	dx = float64(dx) * f
-	dy = float64(dy) * f
-	return &FloatPoint{dy, -dx}
+	return outPath
 }
 
-func getBounds(pts [][]*Point) *rect {
-	var left, top, right, bottom int
-	for _, poly := range pts {
-		for _, pt := range poly {
-			left = pt.X
-			top = pt.Y
-			right = pt.X
-			bottom = pt.Y
-			break
+//------------------------------------------------------------------------------
+
+func (c *Clipper) MinkowskiSumAll(pattern Path, paths Paths, pathIsClosed bool) Paths {
+	var solution Paths
+	c2 := NewClipper(ioNone)
+	for i := 0; i < len(paths); i++ {
+		tmp := c.Minkowski(pattern, paths[i], true, pathIsClosed)
+		c.AddPaths(tmp, ptSubject, true)
+		if pathIsClosed {
+			path := c.TranslatePath(paths[i], pattern[0])
+			c.AddPath(path, ptClip, true)
 		}
+	}
+	solution, _ = c2.Execute1(ctUnion, pftNonZero, pftNonZero)
+	return solution
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) MinkowskiDiff(poly1, poly2 Path) Paths {
+	paths := c.Minkowski(poly1, poly2, false, true)
+	c2 := NewClipper(ioNone)
+	c2.AddPaths(paths, ptSubject, true)
+	paths, _ = c2.Execute1(ctUnion, pftNonZero, pftNonZero)
+	return paths
+}
+
+//------------------------------------------------------------------------------
+
+type NodeType int
+
+const (
+	ntAny NodeType = iota
+	ntOpen
+	ntClosed
+)
+
+func (c *Clipper) PolyTreeToPaths(polytree *PolyTree) Paths {
+
+	result := Paths(make([]Path, 0, polytree.Total()))
+	c.AddPolyNodeToPaths(polytree.toPolyNode(), ntAny, result)
+	return result
+}
+
+//------------------------------------------------------------------------------
+
+func (c *Clipper) AddPolyNodeToPaths(polynode *PolyNode, nt NodeType, paths Paths) {
+	match := true
+	switch nt {
+	case ntOpen:
+		return
+	case ntClosed:
+		match = !polynode.IsOpen
+		break
+	default:
 		break
 	}
 
-	for _, poly := range pts {
-		for _, pt := range poly {
-			if pt.X < left {
-				left = pt.X
-			}
-			if pt.X > right {
-				right = pt.X
-			}
-			if pt.Y < top {
-				top = pt.Y
-			}
-			if pt.Y > bottom {
-				bottom = pt.Y
-			}
-		}
+	if len(polynode.m_polygon) > 0 && match {
+		paths = append(paths, polynode.m_polygon)
 	}
-	return &rect{left, top, right, bottom}
+	for _, pn := range polynode.m_Childs {
+		c.AddPolyNodeToPaths(pn, nt, paths)
+	}
 }
 
-func getLowestPt(poly []*Point) *Point {
-	// precondition: poly must not be empty
-	result := poly[0]
-	for _, pt := range poly {
-		if pt.Y > result.Y || (pt.Y == result.Y && pt.X < result.X) {
-			result = pt
+//------------------------------------------------------------------------------
+
+func (c *Clipper) OpenPathsFromPolyTree(polytree *PolyTree) Paths {
+	result := Paths(make([]Path, 0, polytree.ChildCount()))
+	for i := 0; i < polytree.ChildCount(); i++ {
+		if polytree.m_Childs[i].IsOpen {
+			result = append(result, polytree.m_Childs[i].m_polygon)
 		}
 	}
 	return result
 }
 
-func stripDupPts(poly []*Point) []*Point {
-	if len(poly) == 0 {
-		return poly
-	}
-	for i := 1; i < len(poly); i++ {
-		if pointsEqual(poly[i-1], poly[i]) {
-			poly = append(poly[:i], poly[i+1:]...) // remove item i
-		}
-	}
-	i := len(poly) - 1
-	for i > 0 && pointsEqual(poly[i], poly[0]) {
-		poly = append(poly[:i], poly[i+1:]...) // remove item i
-		i -= 1
-	}
-	return poly
+//------------------------------------------------------------------------------
+
+func (c *Clipper) ClosedPathsFromPolyTree(polytree *PolyTree) Paths {
+	result := Paths(make([]Path, 0, polytree.Total()))
+	c.AddPolyNodeToPaths(polytree.toPolyNode(), ntClosed, result)
+	return result
 }
 
-func offsetInternal(polys [][]*Point, isPolygon bool, delta float64,
-	jointype JoinType, endtype EndType, limit float64) [][]*Point {
+//------------------------------------------------------------------------------
 
-	var sinA, mcos, msin, step360, miterLim float64
-	var pts []*Point
-	var Normals []*FloatPoint
-	var k, j int
-	var result polySorter
-	doSquare := func(pt *Point) {
-		// see offset_triginometry.svg in the documentation folder ...
-		dx := math.Tan(math.Atan2(sinA,
-			(Normals[k].X*Normals[j].X+Normals[k].Y*Normals[j].Y)) / 4)
-		result = append(result, &Point{
-			round(float64(pt.X) + delta*(Normals[k].X-
-				Normals[k].Y*dx)),
-			round(float64(pt.Y) + delta*(Normals[k].Y+Normals[k].X*dx))})
-		result = append(result, &Point{
-			round(float64(pt.X) + delta*(Normals[j].X+Normals[j].Y*dx)),
-			round(float64(pt.Y) + delta*(Normals[j].Y-Normals[j].X*dx))})
+const two_pi = math.Pi * 2
+const def_arc_tolerance = 0.25
+
+type ClipperOffset struct {
+	m_destPolys                   Paths
+	m_srcPoly                     Path
+	m_destPoly                    Path
+	m_normals                     []*DoublePoint
+	m_delta, m_sinA, m_sin, m_cos float64
+	m_miterLim, m_StepsPerRad     float64
+
+	m_lowest    *IntPoint
+	m_polyNodes *PolyNode
+
+	ArcTolerance float64
+	MiterLimit   float64
+}
+
+func NewClipperOffset() *ClipperOffset {
+	co := new(ClipperOffset)
+	co.m_normals = make([]*DoublePoint, 0)
+	co.m_polyNodes = NewPolyNode()
+	co.MiterLimit = 2.0
+	co.ArcTolerance = def_arc_tolerance
+	co.m_lowest.X = -1
+	return co
+}
+
+func (co *ClipperOffset) Clear() {
+	co.m_polyNodes.m_Childs = make([]*PolyNode, 0)
+	co.m_lowest.X = -1
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) Round(value float64) cInt {
+	if value < 0 {
+		return cInt(value - 0.5)
+	} else {
+		return cInt(value + 0.5)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) AddPath(path Path, joinType JoinType, endType EndType) {
+	highI := len(path) - 1
+	if highI < 0 {
 		return
 	}
+	newNode := NewPolyNode()
+	newNode.m_jointype = joinType
+	newNode.m_endtype = endType
 
-	doMiter := func(pt *Point, r float64) {
-		q := delta / r
-		result = append(result, &Point{
-			round(float64(pt.X) + (Normals[k].X+Normals[j].X)*q),
-			round(float64(pt.Y) + (Normals[k].Y+Normals[j].Y)*q)})
-		return
-	}
-
-	doRound := func(pt *Point) {
-		a := math.Atan2(sinA,
-			(Normals[k].X*Normals[j].X + Normals[k].Y*Normals[j].Y))
-		steps := round(step360 * math.Abs(a))
-		X, Y := Normals[k].X, Normals[k].Y
-		for i := 0; i < steps; i++ {
-			result = append(result, &Point{
-				round(float64(pt.X) + X*delta),
-				round(float64(pt.Y) + Y*delta)})
-			X2 := X
-			X = X*mcos - msin*Y
-			Y = X2*msin + Y*mcos
+	//strip duplicate points from path and also get index to the lowest point ...
+	if endType == etClosedLine || endType == etClosedPolygon {
+		for highI > 0 && path[0] == path[highI] {
+			highI--
 		}
-		result = append(result, &Point{round(float64(pt.X) +
-			Normals[j].X*delta), round(float64(pt.Y) + Normals[j].Y*delta)})
-		return
 	}
-
-	GetSin := func() float64 {
-		result := (Normals[k].X*Normals[j].Y - Normals[j].X*Normals[k].Y)
-		if result > 1.0 {
-			result = 1.0
-		} else if result < -1.0 {
-			result = -1.0
-		}
-		return result
-	}
-
-	offsetPoint := func(jointype JoinType) (j int) {
-		if sinA*delta < 0 {
-			result = append(result, &Point{round(float64(pts[j].X) +
-				Normals[k].X*delta),
-				round(float64(pts[j].Y) + Normals[k].Y*delta)})
-			result = append(result, pts[j])
-			result = append(result, &Point{round(float64(pts[j].X) +
-				Normals[j].X*delta),
-				round(float64(pts[j].Y) + Normals[j].Y*delta)})
-		} else if jointype == MiterJoin {
-			r := 1.0 + (Normals[j].X*Normals[k].X + Normals[j].Y*Normals[k].Y)
-			if r >= miterLim {
-				doMiter(pts[j], r)
-			} else {
-				doSquare(pts[j])
+	newNode.m_polygon = Path(make([]*IntPoint, 0, highI+1))
+	newNode.m_polygon = append(newNode.m_polygon, path[0])
+	j := 0
+	k := 0
+	for i := 1; i <= highI; i++ {
+		if newNode.m_polygon[j] != path[i] {
+			j++
+			newNode.m_polygon = append(newNode.m_polygon, path[i])
+			if path[i].Y > newNode.m_polygon[k].Y ||
+				(path[i].Y == newNode.m_polygon[k].Y &&
+					path[i].X < newNode.m_polygon[k].X) {
+				k = j
 			}
-		} else if jointype == SquareJoin {
-			doSquare(pts[j])
-		} else {
-			doRound(pts[j])
-		}
-		return j
-	}
-
-	if delta == 0 {
-		return polys
-	}
-	if !isPolygon && delta < 0 {
-		delta = -delta
-	}
-
-	if jointype == MiterJoin {
-		// miterLim: see offset_triginometry3.svg in the documentation folder ...
-		if limit > 2 {
-			miterLim = 2 / (limit * limit)
-		} else {
-			miterLim = 0.5
-		}
-		if endtype == RoundEnd {
-			limit = 0.25
 		}
 	}
-
-	if jointype == RoundJoin || endtype == RoundEnd {
-		if limit <= 0 {
-			limit = 0.25
-		} else if limit > math.Abs(delta)*0.25 {
-			limit = math.Abs(delta) * 0.25
-		}
-		// step360: see offset_triginometry2.svg in the documentation folder ...
-		step360 := math.Pi / math.Acos(1-limit/math.Abs(delta))
-		msin := math.Sin(2 * math.Pi / step360)
-		//mcos := math.Cos(2 * math.Pi / step360)
-		step360 /= math.Pi * 2
-		if delta < 0 {
-			msin = -msin
-		}
+	if endType == etClosedPolygon && j < 2 {
+		return
 	}
 
-	res := make([][]*Point, 0)
-	ppts := make([][]*Point, len(polys))
-	copy(ppts, polys)
-	for _, pts := range ppts {
-		Normals = make([]*FloatPoint, 0)
-		result = make([]*Point, 0)
-		cnt := len(pts)
+	co.m_polyNodes.AddChild(newNode)
 
-		if cnt == 0 || cnt < 3 && delta <= 0 {
+	//if this path's lowest pt is lower than all the others then update m_lowest
+	if endType != etClosedPolygon {
+		return
+	}
+	if co.m_lowest.X < 0 {
+		co.m_lowest = &IntPoint{cInt(co.m_polyNodes.ChildCount() - 1), cInt(k)}
+	} else {
+		ip := co.m_polyNodes.m_Childs[int(co.m_lowest.X)].m_polygon[int(co.m_lowest.Y)]
+		if newNode.m_polygon[k].Y > ip.Y ||
+			(newNode.m_polygon[k].Y == ip.Y &&
+				newNode.m_polygon[k].X < ip.X) {
+			co.m_lowest = &IntPoint{cInt(co.m_polyNodes.ChildCount() - 1), cInt(k)}
+		}
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) AddPaths(paths Paths, joinType JoinType, endType EndType) {
+	for _, p := range paths {
+		co.AddPath(p, joinType, endType)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) FixOrientations() {
+	//fixup orientations of all closed paths if the orientation of the
+	//closed path with the lowermost vertex is wrong ...
+	if co.m_lowest.X >= 0 &&
+		!Orientation(co.m_polyNodes.m_Childs[int(co.m_lowest.X)].m_polygon) {
+		for i := 0; i < co.m_polyNodes.ChildCount(); i++ {
+			node := co.m_polyNodes.m_Childs[i]
+			if node.m_endtype == etClosedPolygon ||
+				(node.m_endtype == etClosedLine &&
+					Orientation(node.m_polygon)) {
+				reversePath(node.m_polygon)
+			}
+		}
+	} else {
+		for i := 0; i < co.m_polyNodes.ChildCount(); i++ {
+			node := co.m_polyNodes.m_Childs[i]
+			if node.m_endtype == etClosedLine &&
+				!Orientation(node.m_polygon) {
+				reversePath(node.m_polygon)
+			}
+		}
+	}
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) GetUnitNormal(pt1, pt2 *IntPoint) *DoublePoint {
+	dx := float64(pt2.X - pt1.X)
+	dy := float64(pt2.Y - pt1.Y)
+	if (dx == 0) && (dy == 0) {
+		return new(DoublePoint)
+	}
+
+	f := 1 * 1.0 / math.Sqrt(dx*dx+dy*dy)
+	dx *= f
+	dy *= f
+	return &DoublePoint{dy, -dx}
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) DoOffset(delta float64) {
+	co.m_destPolys = Paths(make([]Path, 0, co.m_polyNodes.ChildCount()*2))
+	co.m_delta = delta
+
+	//if Zero offset, just copy any CLOSED polygons to m_p and return ...
+	if near_zero(delta) {
+		for i := 0; i < co.m_polyNodes.ChildCount(); i++ {
+			node := co.m_polyNodes.m_Childs[i]
+			if node.m_endtype == etClosedPolygon {
+				co.m_destPolys = append(co.m_destPolys, node.m_polygon)
+			}
+		}
+		return
+	}
+
+	//see offset_triginometry3.svg in the documentation folder ...
+	if co.MiterLimit > 2 {
+		co.m_miterLim = 2 / (co.MiterLimit * co.MiterLimit)
+	} else {
+		co.m_miterLim = 0.5
+	}
+
+	var y float64
+	if co.ArcTolerance <= 0.0 {
+		y = def_arc_tolerance
+	} else if co.ArcTolerance > math.Abs(delta)*def_arc_tolerance {
+		y = math.Abs(delta) * def_arc_tolerance
+	} else {
+		y = co.ArcTolerance
+	}
+	//see offset_triginometry2.svg in the documentation folder ...
+	steps := math.Pi / math.Acos(1-y/math.Abs(delta))
+	co.m_sin = math.Sin(two_pi / steps)
+	co.m_cos = math.Cos(two_pi / steps)
+	co.m_StepsPerRad = steps / two_pi
+	if delta < 0.0 {
+		co.m_sin = -co.m_sin
+	}
+
+	for i := 0; i < co.m_polyNodes.ChildCount(); i++ {
+		node := co.m_polyNodes.m_Childs[i]
+		co.m_srcPoly = node.m_polygon
+
+		length := len(co.m_srcPoly)
+
+		if length == 0 || (delta <= 0 && (length < 3 ||
+			node.m_endtype != etClosedPolygon)) {
 			continue
 		}
 
-		if cnt == 1 {
-			if jointype == RoundJoin {
-				X, Y := 1.0, 0.0
-				for i := 0; i < round(step360*2*math.Pi); i++ {
-					result = append(result, &Point{round(float64(pts[0].X) +
-						X*delta), round(float64(pts[0].Y) + Y*delta)})
+		co.m_destPoly = Path(make([]*IntPoint, 0, int(steps)+4))
+
+		if length == 1 {
+			if node.m_jointype == jtRound {
+				X := 1.0
+				Y := 0.0
+				for j := 1; j <= int(steps); j++ {
+					co.m_destPoly = append(co.m_destPoly, &IntPoint{
+						co.Round(float64(co.m_srcPoly[0].X) + X*delta),
+						co.Round(float64(co.m_srcPoly[0].Y) + Y*delta)})
 					X2 := X
-					X = X*mcos - msin*Y
-					Y = X2*msin + Y*mcos
+					X = X*co.m_cos - co.m_sin*Y
+					Y = X2*co.m_sin + Y*co.m_cos
 				}
 			} else {
-				X, Y := -1.0, -1.0
-				for i := 0; i < 4; i++ {
-					result = append(result, &Point{round(
-						float64(pts[0].X) + X*delta),
-						round(float64(pts[0].Y) + Y*delta)})
+				X := -1.0
+				Y := -1.0
+				for j := 0; j < 4; j++ {
+					co.m_destPoly = append(co.m_destPoly, &IntPoint{
+						co.Round(float64(co.m_srcPoly[0].X) + X*delta),
+						co.Round(float64(co.m_srcPoly[0].Y) + Y*delta)})
 					if X < 0 {
 						X = 1
 					} else if Y < 0 {
@@ -2967,309 +4566,311 @@ func offsetInternal(polys [][]*Point, isPolygon bool, delta float64,
 					}
 				}
 			}
+			co.m_destPolys = append(co.m_destPolys, co.m_destPoly)
 			continue
 		}
 
-		forceClose := pointsEqual(pts[0], pts[cnt-1])
-		if forceClose {
-			cnt -= 1
+		//build m_normals ...
+		co.m_normals = make([]*DoublePoint, 0, length)
+		for j := 0; j < length-1; j++ {
+			co.m_normals = append(co.m_normals,
+				co.GetUnitNormal(co.m_srcPoly[j], co.m_srcPoly[j+1]))
 		}
-
-		for j := 0; j < cnt-1; j++ {
-			Normals = append(Normals, getUnitNormal(pts[j], pts[j+1]))
-		}
-		if isPolygon || forceClose {
-			Normals = append(Normals, getUnitNormal(pts[cnt-1], pts[0]))
+		if node.m_endtype == etClosedLine ||
+			node.m_endtype == etClosedPolygon {
+			co.m_normals = append(co.m_normals,
+				co.GetUnitNormal(co.m_srcPoly[length-1], co.m_srcPoly[0]))
 		} else {
-			Normals = append(Normals, Normals[cnt-2])
+			co.m_normals = append(co.m_normals,
+				CopyDoublePoint(co.m_normals[length-2]))
 		}
 
-		if isPolygon || forceClose {
-			k = cnt - 1
-			for j := 0; j < cnt; j++ {
-				sinA = GetSin()
-				k = offsetPoint(jointype)
+		if node.m_endtype == etClosedPolygon {
+			k := length - 1
+			for j := 0; j < length; j++ {
+				co.OffsetPoint(j, &k, node.m_jointype)
 			}
-			res = append(res, result)
-
-			if !isPolygon {
-				result = make([]*Point, 0)
-				delta = -delta
-				k = cnt - 1
-				for j := 0; j < cnt; j++ {
-					sinA = GetSin()
-					k = offsetPoint(jointype)
-				}
-				delta = -delta
-				sort.Reverse(result)
-				res = append(res, []*Point(result))
+			co.m_destPolys = append(co.m_destPolys, co.m_destPoly)
+		} else if node.m_endtype == etClosedLine {
+			k := length - 1
+			for j := 0; j < length; j++ {
+				co.OffsetPoint(j, &k, node.m_jointype)
 			}
-
-		} else {
-			// offset the polyline going forward ...
-			var pt1 *Point
+			co.m_destPolys = append(co.m_destPolys, co.m_destPoly)
+			co.m_destPoly = Path(make([]*IntPoint, 0))
+			//re-build m_normals ...
+			n := co.m_normals[length-1]
+			for j := length - 1; j > 0; j-- {
+				co.m_normals[j] = &DoublePoint{-co.m_normals[j-1].X, -co.m_normals[j-1].Y}
+			}
+			co.m_normals[0] = &DoublePoint{-n.X, -n.Y}
 			k = 0
-			for j := 1; j < cnt-1; j++ {
-				sinA = GetSin()
-				k = offsetPoint(jointype)
+			for j := length - 1; j >= 0; j-- {
+				co.OffsetPoint(j, &k, node.m_jointype)
+			}
+			co.m_destPolys = append(co.m_destPolys, co.m_destPoly)
+		} else {
+			k := 0
+			for j := 1; j < length-1; j++ {
+				co.OffsetPoint(j, &k, node.m_jointype)
 			}
 
-			// handle the end (butt, round || square) ...
-			if endtype == ButtEnd {
-				j = cnt - 1
-				pt1 = &Point{round(float64(pts[j].X) + Normals[j].X*delta),
-					round(float64(pts[j].Y) + Normals[j].Y*delta)}
-				result = append(result, pt1)
-				pt1 = &Point{round(float64(pts[j].X) - Normals[j].X*delta),
-					round(float64(pts[j].Y) - Normals[j].Y*delta)}
-				result = append(result, pt1)
+			var pt1 *IntPoint
+			if node.m_endtype == etOpenButt {
+				j := length - 1
+				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[j].X) +
+					co.m_normals[j].X*delta)),
+					cInt(co.Round(float64(co.m_srcPoly[j].Y) +
+						co.m_normals[j].Y*delta))}
+				co.m_destPoly = append(co.m_destPoly, pt1)
+				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[j].X) -
+					co.m_normals[j].X*delta)),
+					cInt(co.Round(float64(co.m_srcPoly[j].Y) -
+						co.m_normals[j].Y*delta))}
+				co.m_destPoly = append(co.m_destPoly, pt1)
 			} else {
-				j = cnt - 1
-				k = cnt - 2
-				Normals[j] = &FloatPoint{-Normals[j].X, -Normals[j].Y}
-				if endtype == SquareEnd {
-					doSquare(pts[j])
+				j := length - 1
+				k := length - 2
+				co.m_sinA = 0
+				co.m_normals[j] = &DoublePoint{-co.m_normals[j].X,
+					-co.m_normals[j].Y}
+				if node.m_endtype == etOpenSquare {
+					co.DoSquare(j, k)
 				} else {
-					doRound(pts[j])
+					co.DoRound(j, k)
 				}
 			}
 
-			// re-build Normals ...
-			for j := cnt - 1; j > 0; j-- {
-				Normals[j] = &FloatPoint{-Normals[j-1].X, -Normals[j-1].Y}
-			}
-			Normals[0] = &FloatPoint{-Normals[1].X, -Normals[1].Y}
-
-			// offset the polyline going backward ...
-			k = cnt - 1
-			for j := cnt - 2; j > 0; j-- {
-				sinA = GetSin()
-				k = offsetPoint(jointype)
+			//re-build m_normals ...
+			for j := length - 1; j > 0; j-- {
+				co.m_normals[j] = &DoublePoint{-co.m_normals[j-1].X, -co.m_normals[j-1].Y}
 			}
 
-			// finally handle the start (butt, round || square) ...
-			if endtype == ButtEnd {
-				pt1 = &Point{round(float64(pts[0].X) - Normals[0].X*delta),
-					round(float64(pts[0].Y) - Normals[0].Y*delta)}
-				result = append(result, pt1)
-				pt1 = &Point{round(float64(pts[0].X) + Normals[0].X*delta),
-					round(float64(pts[0].Y) + Normals[0].Y*delta)}
-				result = append(result, pt1)
+			co.m_normals[0] = &DoublePoint{-co.m_normals[1].X, -co.m_normals[1].Y}
+
+			k = length - 1
+			for j := k - 1; j > 0; j-- {
+				co.OffsetPoint(j, &k, node.m_jointype)
+			}
+
+			if node.m_endtype == etOpenButt {
+				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[0].X) -
+					co.m_normals[0].X*delta)),
+					cInt(co.Round(float64(co.m_srcPoly[0].Y) -
+						co.m_normals[0].Y*delta))}
+				co.m_destPoly = append(co.m_destPoly, pt1)
+				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[0].X) +
+					co.m_normals[0].X*delta)),
+					cInt(co.Round(float64(co.m_srcPoly[0].Y) +
+						co.m_normals[0].Y*delta))}
+				co.m_destPoly = append(co.m_destPoly, pt1)
 			} else {
-				j = 0
 				k = 1
-				if endtype == SquareEnd {
-					doSquare(pts[0])
+				co.m_sinA = 0
+				if node.m_endtype == etOpenSquare {
+					co.DoSquare(0, 1)
 				} else {
-					doRound(pts[0])
+					co.DoRound(0, 1)
 				}
 			}
-			res = append(res, result)
+			co.m_destPolys = append(co.m_destPolys, co.m_destPoly)
 		}
 	}
-	c := NewClipper()
-	c.AddPolygons(res, Subject)
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) Execute(delta float64) (solution Paths) {
+	solution = make([]Path, 0)
+	co.FixOrientations()
+	co.DoOffset(delta)
+	//now clean up 'corners' ...
+	clpr := NewClipper(ioNone)
+	clpr.AddPaths(co.m_destPolys, ptSubject, true)
 	if delta > 0 {
-		res, _ = c.Execute(Union, Positive, Positive)
+		solution, _ = clpr.Execute1(ctUnion,
+			pftPositive, pftPositive)
 	} else {
-		bounds := getBounds(res)
-		outer := make([]*Point, 0)
-		outer = append(outer, &Point{bounds.left - 10, bounds.bottom + 10})
-		outer = append(outer, &Point{bounds.right + 10, bounds.bottom + 10})
-		outer = append(outer, &Point{bounds.right + 10, bounds.top - 10})
-		outer = append(outer, &Point{bounds.left - 10, bounds.top - 10})
-		c.AddPolygon(outer, Subject)
-		c.ReverseSolution = true
-		res, _ = c.Execute(Union, Negative, Negative)
-		if len(res) > 0 {
-			res = res[1:len(res)]
+		r := GetBounds(co.m_destPolys)
+		outer := Path(make([]*IntPoint, 4))
+
+		outer[0] = &IntPoint{r.left - 10, r.bottom + 10}
+		outer[1] = &IntPoint{r.right + 10, r.bottom + 10}
+		outer[2] = &IntPoint{r.right + 10, r.top - 10}
+		outer[3] = &IntPoint{r.left - 10, r.top - 10}
+
+		clpr.AddPath(outer, ptSubject, true)
+		clpr.ReverseSolution = true
+		solution, _ = clpr.Execute1(ctUnion, pftNegative, pftNegative)
+		if len(solution) > 0 {
+			solution = solution[1:]
 		}
 	}
-	return res
+	return
 }
 
-// defaults: jointype = SquareJoin, limit = 0.0, autoFix = true
-func OffsetPolygons(polys [][]*Point, delta float64, jointype JoinType,
-	limit float64, autoFix bool) [][]*Point {
-	if !autoFix {
-		return offsetInternal(polys, true, delta, jointype, ButtEnd, limit)
-	}
-	pts := make([][]*Point, len(polys))
-	copy(pts, polys)
-	botPoly := make([]*Point, 0)
-	var botPt *Point
-	for _, poly := range pts {
-		poly = stripDupPts(poly)
-		if len(poly) < 3 {
-			continue
-		}
-		bot := getLowestPt(poly)
-		if botPt == nil || (bot.Y > botPt.Y) ||
-			(bot.Y == botPt.Y && bot.X < botPt.X) {
-			botPt = bot
-			botPoly = poly
-		}
-	}
-	if botPt == nil {
-		return nil
-	}
-	// if the outermost polygon has the wrong orientation,
-	// reverse the orientation of all the polygons ...
-	if Area(botPoly) < 0.0 {
-		for i := 0; i < len(pts); i++ {
-			ps := polySorter(pts[i])
-			sort.Reverse(ps)
-			pts[i] = []*Point(ps)
-		}
-	}
-	return offsetInternal(pts, true, delta, jointype, ButtEnd, limit)
-}
+//------------------------------------------------------------------------------
 
-//defaults: jointype = SquareJoin, endtype = SquareEnd, limit = 0.0
-func OffsetPolyLines(polys [][]*Point, delta float64, jointype JoinType,
-	endtype EndType, limit float64) [][]*Point {
-	polys2 := make([][]*Point, len(polys))
-	copy(polys2, polys)
-	for _, p := range polys2 {
-		if len(p) == 0 {
-			continue
-		}
-		for i := 1; i < len(p); i++ {
-			if pointsEqual(p[i-1], p[i]) {
-				p = append(p[:i], p[i+1:]...) // remove item i
+func (co *ClipperOffset) Execute2(delta float64) (solution *PolyTree) {
+	solution.Clear()
+	co.FixOrientations()
+	co.DoOffset(delta)
+
+	//now clean up 'corners' ...
+	clpr := NewClipper(ioNone)
+	clpr.AddPaths(co.m_destPolys, ptSubject, true)
+	if delta > 0 {
+		solution, _ = clpr.Execute2(ctUnion,
+			pftPositive, pftPositive)
+	} else {
+		r := GetBounds(co.m_destPolys)
+		outer := Path(make([]*IntPoint, 4))
+
+		outer[0] = &IntPoint{r.left - 10, r.bottom + 10}
+		outer[1] = &IntPoint{r.right + 10, r.bottom + 10}
+		outer[2] = &IntPoint{r.right + 10, r.top - 10}
+		outer[3] = &IntPoint{r.left - 10, r.top - 10}
+
+		clpr.AddPath(outer, ptSubject, true)
+		clpr.ReverseSolution = true
+		solution, _ = clpr.Execute2(ctUnion, pftNegative, pftNegative)
+		//remove the outer PolyNode rectangle ...
+		if solution.ChildCount() == 1 && solution.m_Childs[0].ChildCount() > 0 {
+			outerNode := solution.m_Childs[0]
+			solution.m_Childs[0] = outerNode.m_Childs[0]
+			for i := 1; i < outerNode.ChildCount(); i++ {
+				solution.AddChild(outerNode.m_Childs[i])
 			}
+		} else {
+			solution.Clear()
 		}
 	}
+	return
+}
 
-	if endtype == ClosedEnd {
-		for i := 0; i < len(polys2); i++ {
-			ps := polySorter(polys2[i])
-			sort.Reverse(ps)
-			polys2 = append(polys2, []*Point(ps))
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) OffsetPoint(j int, k *int, jointype JoinType) {
+	//cross product ...
+	co.m_sinA = (co.m_normals[*k].X*co.m_normals[j].Y - co.m_normals[j].X*co.m_normals[*k].Y)
+
+	if math.Abs(co.m_sinA*co.m_delta) < 1.0 {
+		//dot product ...
+		cosA := (co.m_normals[*k].X*co.m_normals[j].X +
+			co.m_normals[j].Y*co.m_normals[*k].Y)
+		if cosA > 0 { // angle ==> 0 degrees {
+			co.m_destPoly = append(co.m_destPoly, &IntPoint{co.Round(
+				float64(co.m_srcPoly[j].X) + co.m_normals[*k].X*co.m_delta),
+				co.Round(float64(co.m_srcPoly[j].Y) +
+					co.m_normals[*k].Y*co.m_delta)})
+			return
 		}
-		return offsetInternal(polys2, true, delta, jointype, ButtEnd, limit)
+		//else angle ==> 180 degrees
+	} else if co.m_sinA > 1.0 {
+		co.m_sinA = 1.0
+	} else if co.m_sinA < -1.0 {
+		co.m_sinA = -1.0
+	}
+
+	if co.m_sinA*co.m_delta < 0 {
+		co.m_destPoly = append(co.m_destPoly, &IntPoint{co.Round(
+			float64(co.m_srcPoly[j].X) + co.m_normals[*k].X*co.m_delta),
+			co.Round(float64(co.m_srcPoly[j].Y) + co.m_normals[*k].Y*co.m_delta)})
+		co.m_destPoly = append(co.m_destPoly, co.m_srcPoly[j])
+		co.m_destPoly = append(co.m_destPoly, &IntPoint{co.Round(
+			float64(co.m_srcPoly[j].X) + co.m_normals[j].X*co.m_delta),
+			co.Round(float64(co.m_srcPoly[j].Y) + co.m_normals[j].Y*co.m_delta)})
 	} else {
-		return offsetInternal(polys2, false, delta, jointype, endtype, limit)
-	}
-}
-
-func distanceSqrd(pt1, pt2 *Point) int {
-	dx := (pt1.X - pt2.X)
-	dy := (pt1.Y - pt2.Y)
-	return (dx*dx + dy*dy)
-}
-
-func closestPointOnLine(pt, linePt1, linePt2 *Point) *Point {
-	dx := linePt2.X - linePt1.X
-	dy := linePt2.Y - linePt1.Y
-	if dx == 0 && dy == 0 {
-		return &Point{linePt1.X, linePt1.Y}
-	}
-	q := ((pt.X-linePt1.X)*dx + (pt.Y-linePt1.Y)*dy) / (dx*dx + dy*dy)
-	return &Point{
-		(1-q)*linePt1.X + q*linePt2.X,
-		(1-q)*linePt1.Y + q*linePt2.Y}
-}
-
-func slopesNearColinear(pt1, pt2, pt3 *Point, distSqrd int) bool {
-	if distanceSqrd(pt1, pt2) > distanceSqrd(pt1, pt3) {
-		return false
-	}
-	cpol := closestPointOnLine(pt2, pt1, pt3)
-	dx := pt2.X - cpol.X
-	dy := pt2.Y - cpol.Y
-	return (dx*dx + dy*dy) < distSqrd
-}
-
-func pointsAreClose(pt1, pt2 *Point, distSqrd int) bool {
-	dx := pt1.X - pt2.X
-	dy := pt1.Y - pt2.Y
-	return (dx*dx)+(dy*dy) <= distSqrd
-}
-
-//defaults: distance float64 = 1.415
-func CleanPolygon(poly []*Point, distance int) []*Point {
-	distSqrd := distance * distance
-	highI := len(poly) - 1
-	for highI > 0 && pointsEqual(poly[highI], poly[0]) {
-		highI -= 1
-	}
-	if highI < 2 {
-		return nil
-	}
-	pt := poly[highI]
-	result := make([]*Point, 0)
-	i := 0
-	for {
-		for i < highI && pointsAreClose(pt, poly[i+1], distSqrd) {
-			i += 2
-		}
-		i2 := i
-		for i < highI && (pointsAreClose(poly[i], poly[i+1], distSqrd) ||
-			slopesNearColinear(pt, poly[i], poly[i+1], distSqrd)) {
-			i += 1
-		}
-		if i >= highI {
+		switch jointype {
+		case jtMiter:
+			{
+				r := 1 + (co.m_normals[j].X*co.m_normals[*k].X +
+					co.m_normals[j].Y*co.m_normals[*k].Y)
+				if r >= co.m_miterLim {
+					co.DoMiter(j, *k, r)
+				} else {
+					co.DoSquare(j, *k)
+				}
+				break
+			}
+		case jtSquare:
+			co.DoSquare(j, *k)
 			break
-		} else if i != i2 {
-			continue
+		case jtRound:
+			co.DoRound(j, *k)
+			break
 		}
-		pt = poly[i]
-		i += 1
-		result = append(result, pt)
 	}
-
-	if i <= highI {
-		result = append(result, poly[i])
-	}
-	j := len(result)
-	if j > 2 && slopesNearColinear(result[j-2], result[j-1], result[0], distSqrd) {
-		result = result[0 : j-1]
-	}
-	if len(result) < 3 {
-		return nil
-	} else {
-		return result
-	}
+	*k = j
 }
 
-// defaults: distance float64 = 1.415
-func CleanPolygons(polys [][]*Point, distance int) [][]*Point {
-	result := make([][]*Point, 0)
-	for _, poly := range polys {
-		result = append(result, CleanPolygon(poly, distance))
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) DoSquare(j, k int) {
+	dx := math.Tan(math.Atan2(co.m_sinA,
+		co.m_normals[k].X*co.m_normals[j].X+
+			co.m_normals[k].Y*co.m_normals[j].Y) / 4)
+	co.m_destPoly = append(co.m_destPoly, &IntPoint{
+		co.Round(float64(co.m_srcPoly[j].X) +
+			co.m_delta*(co.m_normals[k].X-co.m_normals[k].Y*dx)),
+		co.Round(float64(co.m_srcPoly[j].Y) +
+			co.m_delta*(co.m_normals[k].Y+co.m_normals[k].X*dx))})
+	co.m_destPoly = append(co.m_destPoly, &IntPoint{
+		co.Round(float64(co.m_srcPoly[j].X) +
+			co.m_delta*(co.m_normals[j].X+co.m_normals[j].Y*dx)),
+		co.Round(float64(co.m_srcPoly[j].Y) +
+			co.m_delta*(co.m_normals[j].Y-co.m_normals[j].X*dx))})
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) DoMiter(j, k int, r float64) {
+	q := co.m_delta / r
+	co.m_destPoly = append(co.m_destPoly, &IntPoint{co.Round(
+		float64(co.m_srcPoly[j].X) + (co.m_normals[k].X+co.m_normals[j].X)*q),
+		co.Round(float64(co.m_srcPoly[j].Y) +
+			(co.m_normals[k].Y+co.m_normals[j].Y)*q)})
+}
+
+//------------------------------------------------------------------------------
+
+func (co *ClipperOffset) DoRound(j, k int) {
+	a := math.Atan2(co.m_sinA,
+		co.m_normals[k].X*co.m_normals[j].X+co.m_normals[k].Y*co.m_normals[j].Y)
+	steps := int(co.Round(co.m_StepsPerRad * math.Abs(a)))
+
+	X := co.m_normals[k].X
+	Y := co.m_normals[k].Y
+	var X2 float64
+	for i := 0; i < steps; i++ {
+		co.m_destPoly = append(co.m_destPoly, &IntPoint{
+			co.Round(float64(co.m_srcPoly[j].X) + X*co.m_delta),
+			co.Round(float64(co.m_srcPoly[j].Y) + Y*co.m_delta)})
+		X2 = X
+		X = X*co.m_cos - co.m_sin*Y
+		Y = X2*co.m_sin + Y*co.m_cos
 	}
-	return result
+	co.m_destPoly = append(co.m_destPoly, &IntPoint{
+		co.Round(float64(co.m_srcPoly[j].X) + co.m_normals[j].X*co.m_delta),
+		co.Round(float64(co.m_srcPoly[j].Y) + co.m_normals[j].Y*co.m_delta)})
 }
 
-func SimplifyPolygon(poly []*Point, fillType PolyFillType) [][]*Point {
-	var result [][]*Point
-	c := NewClipper()
-	c.ForceSimple = true
-	c.AddPolygon(poly, Subject)
-	result, _ = c.Execute(Union, fillType, fillType)
-	return result
+//------------------------------------------------------------------------------
+
+type ClipperException struct {
+	s string
 }
 
-func SimplifyPolygons(polys [][]*Point, fillType PolyFillType) [][]*Point {
-	var result [][]*Point
-	c := NewClipper()
-	c.ForceSimple = true
-	c.AddPolygons(polys, Subject)
-	result, _ = c.Execute(Union, fillType, fillType)
-	return result
+func NewClipperException(s string) *ClipperException {
+	e := new(ClipperException)
+	e.s = s
+	return e
 }
 
-type polySorter []*Point
-
-func (p polySorter) Len() int           { return len(p) }
-func (p polySorter) Less(i, j int) bool { return false }
-func (p polySorter) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
-
-// convert float to int (rounding)
-func round(f float64) int {
-	return int(f + 0.5)
+func (e ClipperException) Error() string {
+	return e.s
 }
+
 func intAbs(i int) int {
 	if i > 0 {
 		return i
@@ -3277,14 +4878,14 @@ func intAbs(i int) int {
 		return i * -1
 	}
 }
-func min(a, b int) int {
+func min(a, b cInt) cInt {
 	if a < b {
 		return a
 	} else {
 		return b
 	}
 }
-func max(a, b int) int {
+func max(a, b cInt) cInt {
 	if a > b {
 		return a
 	} else {
