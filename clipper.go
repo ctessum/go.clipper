@@ -340,8 +340,8 @@ type TEdge struct {
 }
 
 func (e *TEdge) String() string {
-	return fmt.Sprintf("Bot: %v, Curr: %v, Top: %v, Delta: %v",
-		e.Bot, e.Curr, e.Top, e.Delta)
+	return fmt.Sprintf("Bot: %v, Curr: %v, Top: %v, Delta: %v, Dx: %v",
+		e.Bot, e.Curr, e.Top, e.Delta, e.Dx)
 }
 
 //func (e *TEdge) Copy() *TEdge {
@@ -364,7 +364,7 @@ func (e *TEdge) printEdges() string {
 	for {
 		s += fmt.Sprintf("%v\n", E)
 		E = E.Next
-		if E == e {
+		if  E==nil || E == e  {
 			break
 		}
 	}
@@ -425,6 +425,20 @@ type Scanbeam struct {
 	Next *Scanbeam
 }
 
+func (s *Scanbeam) String() string {
+	return fmt.Sprintf("Y: %v", s.Y)
+}
+
+func(s *Scanbeam) printScanbeams() string {
+	str := ""
+	s2 := s
+	for s2!= nil {
+	str += fmt.Sprint(s2) + " "
+	s2 = s2.Next
+	}
+	return str
+	}
+
 type OutRec struct {
 	Idx            int
 	IsHole, IsOpen bool
@@ -440,9 +454,19 @@ type OutPt struct {
 	Next, Prev *OutPt
 }
 
+func (o *OutPt) String() string {
+	return fmt.Sprintf("Idx: %v, Pt: %v",
+		o.Idx,o.Pt)
+}
+
 type Join struct {
 	OutPt1, OutPt2 *OutPt
 	OffPt          *IntPoint
+}
+
+func (j *Join) String() string {
+	return fmt.Sprintf("OutPt1: %v, OutPt2: %v, OffPt: %v",
+		j.OutPt1,j.OutPt2, j.OffPt)
 }
 
 var horizontal = math.Inf(-1)
@@ -1239,6 +1263,7 @@ func (c *Clipper) InsertScanbeam(Y cInt) {
 		newSb.Next = sb2.Next
 		sb2.Next = newSb
 	}
+	fmt.Println("slkjfalsjflasjldfkjaslj",c.m_Scanbeam.printScanbeams())
 }
 
 //------------------------------------------------------------------------------
@@ -2008,7 +2033,7 @@ func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
 		newOp := new(OutPt)
 		outRec.Pts = newOp
 		newOp.Idx = outRec.Idx
-		newOp.Pt = pt
+		newOp.Pt = pt.Copy()
 		newOp.Next = newOp
 		newOp.Prev = newOp
 		if !outRec.IsOpen {
@@ -2028,7 +2053,7 @@ func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
 
 		newOp := new(OutPt)
 		newOp.Idx = outRec.Idx
-		newOp.Pt = pt
+		newOp.Pt = pt.Copy()
 		newOp.Next = op
 		newOp.Prev = op.Prev
 		newOp.Prev.Next = newOp
@@ -2855,7 +2880,6 @@ func (c *Clipper) ProcessIntersections(botY, topY cInt) bool {
 	//		}
 	//	}()
 	c.BuildIntersectList(botY, topY)
-	fmt.Println("IntersectList", c.m_IntersectList)
 	if len(c.m_IntersectList) == 0 {
 		return true
 	}
@@ -2883,6 +2907,12 @@ func (c *Clipper) BuildIntersectList(botY, topY cInt) {
 		e.PrevInSEL = e.PrevInAEL
 		e.NextInSEL = e.NextInAEL
 		e.Curr.X = c.TopX(e, &topY)
+		if e.Curr.X < 0 {
+		fmt.Println("ActiveEddges ",c.m_ActiveEdges)
+		fmt.Println("IntersectList ",c.m_IntersectList)
+		fmt.Println("Joins ",c.m_Joins)
+		fmt.Println("Scanbeam ",c.m_Scanbeam.printScanbeams())
+		panic(fmt.Sprintf("<0: %v, %v",e,topY))}
 		e = e.NextInAEL
 	}
 
@@ -2912,6 +2942,7 @@ func (c *Clipper) BuildIntersectList(botY, topY cInt) {
 			break
 		}
 	}
+		fmt.Println("IntersectList", c.m_IntersectList)
 	c.m_SortedEdges = nil
 }
 
@@ -2989,6 +3020,7 @@ func (c *Clipper) TopX(edge *TEdge, currentY *cInt) cInt {
 	if *currentY == edge.Top.Y {
 		return edge.Top.X
 	}
+	fmt.Println("TopX",edge,"currentY",*currentY)
 	return edge.Bot.X + c.Round(edge.Dx*float64(*currentY-edge.Bot.Y))
 }
 
