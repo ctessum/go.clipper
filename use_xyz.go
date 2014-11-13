@@ -25,10 +25,12 @@ func NewIntPointFromFloat(x, y, z float64) *IntPoint {
 	return ip
 }
 
-func (ip *IntPoint) Copy() *IntPoint {
-	ip2 := new(IntPoint)
-	ip2.X, ip2.Y, ip2.Z = ip.X, ip.Y, ip.Z
-	return ip2
+func (ip *IntPoint) Copy() IntPoint {
+	return IntPoint{
+		X: ip.X,
+		Y: ip.Y,
+		Z: ip.Z,
+	}
 }
 
 func (c *ClipperBase) ReverseHorizontal(e *TEdge) {
