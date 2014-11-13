@@ -9,7 +9,7 @@ type IntPoint struct {
 	Y cInt
 }
 
-func (p *IntPoint) String() string {
+func (p IntPoint) String() string {
 	return fmt.Sprintf("{%v, %v}", p.X, p.Y)
 }
 
@@ -24,10 +24,11 @@ func NewIntPointFromFloat(x, y float64) *IntPoint {
 	return ip
 }
 
-func (ip *IntPoint) Copy() *IntPoint {
-	ip2 := new(IntPoint)
-	ip2.X, ip2.Y = ip.X, ip.Y
-	return ip2
+func (ip *IntPoint) Copy() IntPoint {
+	return IntPoint{
+		X: ip.X,
+		Y: ip.Y,
+	}
 }
 
 func (c *ClipperBase) ReverseHorizontal(e *TEdge) {

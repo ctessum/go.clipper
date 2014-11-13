@@ -48,6 +48,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"strings"
 )
 
 type Path []*IntPoint
@@ -61,12 +62,11 @@ func NewPaths() Paths {
 }
 
 func (p Path) String() string {
-	s := "{"
-	for _, pp := range p {
-		s += fmt.Sprint(pp) + " "
+	v := make([]string, len(p))
+	for i, pp := range p {
+		v[i] = pp.String()
 	}
-	s += "}"
-	return s
+	return fmt.Sprintf("{%v}", strings.Join(v, ", "))
 }
 
 func (p Paths) String() string {
@@ -256,13 +256,14 @@ func NewIntRect(l, t, r, b cInt) *IntRect {
 	this.bottom = b
 	return this
 }
-func (ir *IntRect) Copy() *IntRect {
-	this := new(IntRect)
-	this.left = ir.left
-	this.top = ir.top
-	this.right = ir.right
-	this.bottom = ir.bottom
-	return this
+
+func (ir *IntRect) Copy() IntRect {
+	return IntRect{
+		left:   ir.left,
+		top:    ir.top,
+		right:  ir.right,
+		bottom: ir.bottom,
+	}
 }
 
 type ClipType int
@@ -327,7 +328,7 @@ const (
 )
 
 type TEdge struct {
-	Bot, Curr, Top, Delta            *IntPoint
+	Bot, Curr, Top, Delta            IntPoint
 	Dx                               float64
 	PolyTyp                          PolyType
 	Side                             EdgeSide
@@ -364,7 +365,7 @@ func (e *TEdge) printEdges() string {
 	for {
 		s += fmt.Sprintf("%v\n", E)
 		E = E.Next
-		if  E==nil || E == e  {
+		if E == nil || E == e {
 			break
 		}
 	}
@@ -429,15 +430,15 @@ func (s *Scanbeam) String() string {
 	return fmt.Sprintf("Y: %v", s.Y)
 }
 
-func(s *Scanbeam) printScanbeams() string {
+func (s *Scanbeam) printScanbeams() string {
 	str := ""
 	s2 := s
-	for s2!= nil {
-	str += fmt.Sprint(s2) + " "
-	s2 = s2.Next
+	for s2 != nil {
+		str += " " + fmt.Sprint(s2)
+		s2 = s2.Next
 	}
 	return str
-	}
+}
 
 type OutRec struct {
 	Idx            int
@@ -456,7 +457,7 @@ type OutPt struct {
 
 func (o *OutPt) String() string {
 	return fmt.Sprintf("Idx: %v, Pt: %v",
-		o.Idx,o.Pt)
+		o.Idx, o.Pt)
 }
 
 type Join struct {
@@ -466,7 +467,7 @@ type Join struct {
 
 func (j *Join) String() string {
 	return fmt.Sprintf("OutPt1: %v, OutPt2: %v, OffPt: %v",
-		j.OutPt1,j.OutPt2, j.OffPt)
+		j.OutPt1, j.OutPt2, j.OffPt)
 }
 
 var horizontal = math.Inf(-1)
@@ -496,9 +497,7 @@ func near_zero(val float64) bool {
 }
 
 func (c *ClipperBase) Swap(val1, val2 *cInt) {
-	tmp := val1
-	val1 = val2
-	val2 = tmp
+	*val1, *val2 = *val2, *val1
 }
 
 //------------------------------------------------------------------------------
@@ -632,8 +631,7 @@ func (c *ClipperBase) RangeTest(Pt *IntPoint, useFullRange *bool) {
 
 //------------------------------------------------------------------------------
 
-func (c *ClipperBase) InitEdge(e, eNext,
-	ePrev *TEdge, pt *IntPoint) {
+func (c *ClipperBase) InitEdge(e, eNext, ePrev *TEdge, pt *IntPoint) {
 	e.Next = eNext
 	e.Prev = ePrev
 	e.Curr = pt.Copy()
@@ -850,7 +848,7 @@ func (c *ClipperBase) AddPath(pg Path, polyType PolyType, Closed bool) bool {
 	IsFlat := true
 
 	//1. Basic (first) edge initialization ...
-	edges[1].Curr = pg[1]
+	edges[1].Curr = pg[1].Copy()
 	c.RangeTest(pg[0], &c.m_UseFullRange)
 	c.RangeTest(pg[highI], &c.m_UseFullRange)
 	c.InitEdge(edges[0], edges[1], edges[highI], pg[0])
@@ -879,9 +877,9 @@ func (c *ClipperBase) AddPath(pg Path, polyType PolyType, Closed bool) bool {
 		if E.Prev == E.Next {
 			break //only two vertices
 		} else if Closed &&
-			c.SlopesEqual3(E.Prev.Curr, E.Curr, E.Next.Curr, c.m_UseFullRange) &&
+			c.SlopesEqual3(&E.Prev.Curr, &E.Curr, &E.Next.Curr, c.m_UseFullRange) &&
 			(!c.PreserveCollinear ||
-				!c.Pt2IsBetweenPt1AndPt3(E.Prev.Curr, E.Curr, E.Next.Curr)) {
+				!c.Pt2IsBetweenPt1AndPt3(&E.Prev.Curr, &E.Curr, &E.Next.Curr)) {
 			//Collinear edges are allowed for open paths but in closed paths
 			//the default is to merge adjacent collinear edges into a single edge.
 			//However, if the PreserveCollinear property is enabled, only overlapping
@@ -1044,7 +1042,7 @@ func (c *ClipperBase) RemoveEdge(e *TEdge) *TEdge {
 //------------------------------------------------------------------------------
 
 func (c *ClipperBase) SetDx(e *TEdge) {
-	e.Delta = &IntPoint{(e.Top.X - e.Bot.X), (e.Top.Y - e.Bot.Y)}
+	e.Delta = IntPoint{(e.Top.X - e.Bot.X), (e.Top.Y - e.Bot.Y)}
 	if e.Delta.Y == 0 {
 		e.Dx = horizontal
 	} else {
@@ -1263,7 +1261,7 @@ func (c *Clipper) InsertScanbeam(Y cInt) {
 		newSb.Next = sb2.Next
 		sb2.Next = newSb
 	}
-	fmt.Println("slkjfalsjflasjldfkjaslj",c.m_Scanbeam.printScanbeams())
+	// fmt.Printf("slkjfalsjflasjldfkjaslj%v\n", c.m_Scanbeam.printScanbeams())
 }
 
 //------------------------------------------------------------------------------
@@ -1363,7 +1361,7 @@ func (c *Clipper) ExecuteInternal() bool {
 			break
 		}
 		topY := c.PopScanbeam()
-		if !c.ProcessIntersections(botY, topY) {
+		if !c.ProcessIntersections(topY) {
 			return false
 		}
 		c.ProcessEdgesAtTopOfScanbeam(topY)
@@ -1457,13 +1455,13 @@ func (c *Clipper) InsertLocalMinimaIntoAEL(botY cInt) {
 			c.InsertEdgeIntoAEL(rb, nil)
 			c.SetWindingCount(rb)
 			if c.IsContributing(rb) {
-				Op1 = c.AddOutPt(rb, rb.Bot)
+				Op1 = c.AddOutPt(rb, &rb.Bot)
 			}
 		} else if rb == nil {
 			c.InsertEdgeIntoAEL(lb, nil)
 			c.SetWindingCount(lb)
 			if c.IsContributing(lb) {
-				Op1 = c.AddOutPt(lb, lb.Bot)
+				Op1 = c.AddOutPt(lb, &lb.Bot)
 			}
 			c.InsertScanbeam(lb.Top.Y)
 		} else {
@@ -1473,7 +1471,7 @@ func (c *Clipper) InsertLocalMinimaIntoAEL(botY cInt) {
 			rb.WindCnt = lb.WindCnt
 			rb.WindCnt2 = lb.WindCnt2
 			if c.IsContributing(lb) {
-				Op1 = c.AddLocalMinPoly(lb, rb, lb.Bot)
+				Op1 = c.AddLocalMinPoly(lb, rb, &lb.Bot)
 			}
 			c.InsertScanbeam(lb.Top.Y)
 		}
@@ -1508,16 +1506,16 @@ func (c *Clipper) InsertLocalMinimaIntoAEL(botY cInt) {
 			lb.PrevInAEL.OutIdx >= 0 &&
 			c.SlopesEqual(lb.PrevInAEL, lb, c.m_UseFullRange) &&
 			lb.WindDelta != 0 && lb.PrevInAEL.WindDelta != 0 {
-			Op2 := c.AddOutPt(lb.PrevInAEL, lb.Bot)
-			c.AddJoin(Op1, Op2, lb.Top)
+			Op2 := c.AddOutPt(lb.PrevInAEL, &lb.Bot)
+			c.AddJoin(Op1, Op2, &lb.Top)
 		}
 
 		if lb.NextInAEL != rb {
 			if rb.OutIdx >= 0 && rb.PrevInAEL.OutIdx >= 0 &&
 				c.SlopesEqual(rb.PrevInAEL, rb, c.m_UseFullRange) &&
 				rb.WindDelta != 0 && rb.PrevInAEL.WindDelta != 0 {
-				Op2 := c.AddOutPt(rb.PrevInAEL, rb.Bot)
-				c.AddJoin(Op1, Op2, rb.Top)
+				Op2 := c.AddOutPt(rb.PrevInAEL, &rb.Bot)
+				c.AddJoin(Op1, Op2, &rb.Top)
 			}
 
 			e := lb.NextInAEL
@@ -1525,7 +1523,7 @@ func (c *Clipper) InsertLocalMinimaIntoAEL(botY cInt) {
 				for e != rb {
 					//nb: For calculating winding counts etc, IntersectEdges() assumes
 					//that param1 will be to the right of param2 ABOVE the intersection ...
-					c.IntersectEdges(rb, e, lb.Curr, true) //order important here
+					c.IntersectEdges(rb, e, &lb.Curr, true) //order important here
 					e = e.NextInAEL
 				}
 			}
@@ -1567,13 +1565,11 @@ func (c *Clipper) InsertEdgeIntoAEL(edge, startEdge *TEdge) {
 func (c *Clipper) E2InsertsBeforeE1(e1, e2 *TEdge) bool {
 	if e2.Curr.X == e1.Curr.X {
 		if e2.Top.Y > e1.Top.Y {
-			return e2.Top.X < c.TopX(e1, &e2.Top.Y)
-		} else {
-			return e1.Top.X > c.TopX(e2, &e1.Top.Y)
+			return e2.Top.X < TopX(e1, &e2.Top.Y)
 		}
-	} else {
-		return e2.Curr.X < e1.Curr.X
+		return e1.Top.X > TopX(e2, &e1.Top.Y)
 	}
+	return e2.Curr.X < e1.Curr.X
 }
 
 //------------------------------------------------------------------------------
@@ -1998,11 +1994,11 @@ func (c *Clipper) AddLocalMinPoly(e1, e2 *TEdge, pt *IntPoint) *OutPt {
 	}
 
 	if prevE != nil && prevE.OutIdx >= 0 &&
-		(c.TopX(prevE, &pt.Y) == c.TopX(e, &pt.Y)) &&
+		(TopX(prevE, &pt.Y) == TopX(e, &pt.Y)) &&
 		c.SlopesEqual(e, prevE, c.m_UseFullRange) &&
 		(e.WindDelta != 0) && (prevE.WindDelta != 0) {
 		outPt := c.AddOutPt(prevE, pt)
-		c.AddJoin(result, outPt, e.Top)
+		c.AddJoin(result, outPt, &e.Top)
 	}
 	return result
 }
@@ -2033,7 +2029,8 @@ func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
 		newOp := new(OutPt)
 		outRec.Pts = newOp
 		newOp.Idx = outRec.Idx
-		newOp.Pt = pt.Copy()
+		p := pt.Copy()
+		newOp.Pt = &p
 		newOp.Next = newOp
 		newOp.Prev = newOp
 		if !outRec.IsOpen {
@@ -2045,15 +2042,16 @@ func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
 		outRec := c.m_PolyOuts[e.OutIdx]
 		//OutRec.Pts is the 'Left-most' point & OutRec.Pts.Prev is the 'Right-most'
 		op := outRec.Pts
-		if ToFront && pt == op.Pt {
+		if ToFront && *pt == *op.Pt {
 			return op
-		} else if !ToFront && pt == op.Prev.Pt {
+		} else if !ToFront && *pt == *op.Prev.Pt {
 			return op.Prev
 		}
 
 		newOp := new(OutPt)
 		newOp.Idx = outRec.Idx
-		newOp.Pt = pt.Copy()
+		p := pt.Copy()
+		newOp.Pt = &p
 		newOp.Next = op
 		newOp.Prev = op.Prev
 		newOp.Prev.Next = newOp
@@ -2063,14 +2061,6 @@ func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
 		}
 		return newOp
 	}
-}
-
-//------------------------------------------------------------------------------
-
-func (c *Clipper) SwapPoints(pt1, pt2 *IntPoint) {
-	tmp := pt1.Copy()
-	pt1 = pt2
-	pt2 = tmp
 }
 
 //------------------------------------------------------------------------------
@@ -2651,7 +2641,7 @@ func (c *Clipper) DeleteFromSEL(e *TEdge) {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) UpdateEdgeIntoAEL(e *TEdge) {
+func (c *Clipper) UpdateEdgeIntoAEL(e *TEdge) *TEdge {
 	if e.NextInLML == nil {
 		panic(NewClipperException("UpdateEdgeIntoAEL: invalid call"))
 	}
@@ -2677,6 +2667,7 @@ func (c *Clipper) UpdateEdgeIntoAEL(e *TEdge) {
 	if !c.IsHorizontal(e) {
 		c.InsertScanbeam(e.Top.Y)
 	}
+	return e
 }
 
 //------------------------------------------------------------------------------
@@ -2740,19 +2731,19 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 				//we're at the last of consec. horizontals when matching with eMaxPair
 				if e == eMaxPair && IsLastHorz {
 					if horzEdge.OutIdx >= 0 {
-						op1 := c.AddOutPt(horzEdge, horzEdge.Top)
+						op1 := c.AddOutPt(horzEdge, &horzEdge.Top)
 						eNextHorz := c.m_SortedEdges
 						for eNextHorz != nil {
 							if eNextHorz.OutIdx >= 0 &&
 								c.HorzSegmentsOverlap(horzEdge.Bot.X,
 									horzEdge.Top.X, eNextHorz.Bot.X, eNextHorz.Top.X) {
-								op2 := c.AddOutPt(eNextHorz, eNextHorz.Bot)
-								c.AddJoin(op2, op1, eNextHorz.Top)
+								op2 := c.AddOutPt(eNextHorz, &eNextHorz.Bot)
+								c.AddJoin(op2, op1, &eNextHorz.Top)
 							}
 							eNextHorz = eNextHorz.NextInSEL
 						}
-						c.AddGhostJoin(op1, horzEdge.Bot)
-						c.AddLocalMaxPoly(horzEdge, eMaxPair, horzEdge.Top)
+						c.AddGhostJoin(op1, &horzEdge.Bot)
+						c.AddLocalMaxPoly(horzEdge, eMaxPair, &horzEdge.Top)
 					}
 					c.DeleteFromAEL(horzEdge)
 					c.DeleteFromAEL(eMaxPair)
@@ -2773,9 +2764,9 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 		}
 
 		if horzEdge.NextInLML != nil && c.IsHorizontal(horzEdge.NextInLML) {
-			c.UpdateEdgeIntoAEL(horzEdge)
+			horzEdge = c.UpdateEdgeIntoAEL(horzEdge)
 			if horzEdge.OutIdx >= 0 {
-				c.AddOutPt(horzEdge, horzEdge.Bot)
+				c.AddOutPt(horzEdge, &horzEdge.Bot)
 			}
 			c.GetHorzDirection(horzEdge, &dir, &horzLeft, &horzRight)
 		} else {
@@ -2785,12 +2776,12 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 
 	if horzEdge.NextInLML != nil {
 		if horzEdge.OutIdx >= 0 {
-			op1 := c.AddOutPt(horzEdge, horzEdge.Top)
+			op1 := c.AddOutPt(horzEdge, &horzEdge.Top)
 			if isTopOfScanbeam {
-				c.AddGhostJoin(op1, horzEdge.Bot)
+				c.AddGhostJoin(op1, &horzEdge.Bot)
 			}
 
-			c.UpdateEdgeIntoAEL(horzEdge)
+			horzEdge = c.UpdateEdgeIntoAEL(horzEdge)
 			if horzEdge.WindDelta == 0 {
 				return
 			}
@@ -2801,21 +2792,21 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 				ePrev.Curr.Y == horzEdge.Bot.Y && ePrev.WindDelta != 0 &&
 				(ePrev.OutIdx >= 0 && ePrev.Curr.Y > ePrev.Top.Y &&
 					c.SlopesEqual(horzEdge, ePrev, c.m_UseFullRange)) {
-				op2 := c.AddOutPt(ePrev, horzEdge.Bot)
-				c.AddJoin(op1, op2, horzEdge.Top)
+				op2 := c.AddOutPt(ePrev, &horzEdge.Bot)
+				c.AddJoin(op1, op2, &horzEdge.Top)
 			} else if eNext != nil && eNext.Curr.X == horzEdge.Bot.X &&
 				eNext.Curr.Y == horzEdge.Bot.Y && eNext.WindDelta != 0 &&
 				eNext.OutIdx >= 0 && eNext.Curr.Y > eNext.Top.Y &&
 				c.SlopesEqual(horzEdge, eNext, c.m_UseFullRange) {
-				op2 := c.AddOutPt(eNext, horzEdge.Bot)
-				c.AddJoin(op1, op2, horzEdge.Top)
+				op2 := c.AddOutPt(eNext, &horzEdge.Bot)
+				c.AddJoin(op1, op2, &horzEdge.Top)
 			}
 		} else {
-			c.UpdateEdgeIntoAEL(horzEdge)
+			horzEdge = c.UpdateEdgeIntoAEL(horzEdge)
 		}
 	} else {
 		if horzEdge.OutIdx >= 0 {
-			c.AddOutPt(horzEdge, horzEdge.Top)
+			c.AddOutPt(horzEdge, &horzEdge.Top)
 		}
 		c.DeleteFromAEL(horzEdge)
 	}
@@ -2853,9 +2844,9 @@ func (c *Clipper) IsIntermediate(e *TEdge, Y cInt) bool {
 
 func (c *Clipper) GetMaximaPair(e *TEdge) *TEdge {
 	var result *TEdge
-	if (e.Next.Top == e.Top) && e.Next.NextInLML == nil {
+	if e.Next.Top == e.Top && e.Next.NextInLML == nil {
 		result = e.Next
-	} else if (e.Prev.Top == e.Top) && e.Prev.NextInLML == nil {
+	} else if e.Prev.Top == e.Top && e.Prev.NextInLML == nil {
 		result = e.Prev
 	}
 	if result != nil && (result.OutIdx == Skip ||
@@ -2867,7 +2858,7 @@ func (c *Clipper) GetMaximaPair(e *TEdge) *TEdge {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) ProcessIntersections(botY, topY cInt) bool {
+func (c *Clipper) ProcessIntersections(topY cInt) bool {
 	if c.m_ActiveEdges == nil {
 		return true
 	}
@@ -2879,7 +2870,7 @@ func (c *Clipper) ProcessIntersections(botY, topY cInt) bool {
 	//				r.(error).Error()))
 	//		}
 	//	}()
-	c.BuildIntersectList(botY, topY)
+	c.BuildIntersectList(topY)
 	if len(c.m_IntersectList) == 0 {
 		return true
 	}
@@ -2895,7 +2886,7 @@ func (c *Clipper) ProcessIntersections(botY, topY cInt) bool {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) BuildIntersectList(botY, topY cInt) {
+func (c *Clipper) BuildIntersectList(topY cInt) {
 	if c.m_ActiveEdges == nil {
 		return
 	}
@@ -2906,13 +2897,7 @@ func (c *Clipper) BuildIntersectList(botY, topY cInt) {
 	for e != nil {
 		e.PrevInSEL = e.PrevInAEL
 		e.NextInSEL = e.NextInAEL
-		e.Curr.X = c.TopX(e, &topY)
-		if e.Curr.X < 0 {
-		fmt.Println("ActiveEddges ",c.m_ActiveEdges)
-		fmt.Println("IntersectList ",c.m_IntersectList)
-		fmt.Println("Joins ",c.m_Joins)
-		fmt.Println("Scanbeam ",c.m_Scanbeam.printScanbeams())
-		panic(fmt.Sprintf("<0: %v, %v",e,topY))}
+		e.Curr.X = TopX(e, &topY)
 		e = e.NextInAEL
 	}
 
@@ -2923,6 +2908,7 @@ func (c *Clipper) BuildIntersectList(botY, topY cInt) {
 		e = c.m_SortedEdges
 		for e.NextInSEL != nil {
 			eNext := e.NextInSEL
+
 			if e.Curr.X > eNext.Curr.X {
 				newNode := new(IntersectNode)
 				newNode.Edge1 = e
@@ -2942,7 +2928,7 @@ func (c *Clipper) BuildIntersectList(botY, topY cInt) {
 			break
 		}
 	}
-		fmt.Println("IntersectList", c.m_IntersectList)
+	// fmt.Println("IntersectList", c.m_IntersectList)
 	c.m_SortedEdges = nil
 }
 
@@ -3006,7 +2992,7 @@ func (c *Clipper) ProcessIntersectList() {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) Round(value float64) cInt {
+func Round(value float64) cInt {
 	if value < 0 {
 		return cInt(value - 0.5)
 	} else {
@@ -3016,12 +3002,12 @@ func (c *Clipper) Round(value float64) cInt {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) TopX(edge *TEdge, currentY *cInt) cInt {
+func TopX(edge *TEdge, currentY *cInt) cInt {
 	if *currentY == edge.Top.Y {
 		return edge.Top.X
 	}
-	fmt.Println("TopX",edge,"currentY",*currentY)
-	return edge.Bot.X + c.Round(edge.Dx*float64(*currentY-edge.Bot.Y))
+	// fmt.Println("TopX", edge, "currentY", *currentY)
+	return edge.Bot.X + Round(edge.Dx*float64(*currentY-edge.Bot.Y))
 }
 
 //------------------------------------------------------------------------------
@@ -3033,7 +3019,7 @@ func (c *Clipper) IntersectPoint(edge1, edge2 *TEdge) (ip *IntPoint) {
 	//return false but for the edge.Dx value be equal due to float64 precision rounding.
 	if edge1.Dx == edge2.Dx {
 		ip.Y = edge1.Curr.Y
-		ip.X = c.TopX(edge1, &ip.Y)
+		ip.X = TopX(edge1, &ip.Y)
 		return
 	}
 
@@ -3043,7 +3029,7 @@ func (c *Clipper) IntersectPoint(edge1, edge2 *TEdge) (ip *IntPoint) {
 			ip.Y = edge2.Bot.Y
 		} else {
 			b2 = float64(edge2.Bot.Y) - (float64(edge2.Bot.X) / edge2.Dx)
-			ip.Y = c.Round(float64(ip.X)/edge2.Dx + b2)
+			ip.Y = Round(float64(ip.X)/edge2.Dx + b2)
 		}
 	} else if edge2.Delta.X == 0 {
 		ip.X = edge2.Bot.X
@@ -3051,17 +3037,17 @@ func (c *Clipper) IntersectPoint(edge1, edge2 *TEdge) (ip *IntPoint) {
 			ip.Y = edge1.Bot.Y
 		} else {
 			b1 = float64(edge1.Bot.Y) - (float64(edge1.Bot.X) / edge1.Dx)
-			ip.Y = c.Round(float64(ip.X)/edge1.Dx + b1)
+			ip.Y = Round(float64(ip.X)/edge1.Dx + b1)
 		}
 	} else {
 		b1 = float64(edge1.Bot.X) - float64(edge1.Bot.Y)*edge1.Dx
 		b2 = float64(edge2.Bot.X) - float64(edge2.Bot.Y)*edge2.Dx
 		q := (b2 - b1) / (edge1.Dx - edge2.Dx)
-		ip.Y = c.Round(q)
+		ip.Y = Round(q)
 		if math.Abs(edge1.Dx) < math.Abs(edge2.Dx) {
-			ip.X = c.Round(edge1.Dx*q + b1)
+			ip.X = Round(edge1.Dx*q + b1)
 		} else {
-			ip.X = c.Round(edge2.Dx*q + b2)
+			ip.X = Round(edge2.Dx*q + b2)
 		}
 	}
 
@@ -3072,9 +3058,9 @@ func (c *Clipper) IntersectPoint(edge1, edge2 *TEdge) (ip *IntPoint) {
 			ip.Y = edge2.Top.Y
 		}
 		if math.Abs(edge1.Dx) < math.Abs(edge2.Dx) {
-			ip.X = c.TopX(edge1, &ip.Y)
+			ip.X = TopX(edge1, &ip.Y)
 		} else {
-			ip.X = c.TopX(edge2, &ip.Y)
+			ip.X = TopX(edge2, &ip.Y)
 		}
 	}
 	//finally, don't allow 'ip' to be BELOW curr.Y (ie bottom of scanbeam) ...
@@ -3082,9 +3068,9 @@ func (c *Clipper) IntersectPoint(edge1, edge2 *TEdge) (ip *IntPoint) {
 		ip.Y = edge1.Curr.Y
 		//better to use the more vertical edge to derive X ...
 		if math.Abs(edge1.Dx) > math.Abs(edge2.Dx) {
-			ip.X = c.TopX(edge2, &ip.Y)
+			ip.X = TopX(edge2, &ip.Y)
 		} else {
-			ip.X = c.TopX(edge1, &ip.Y)
+			ip.X = TopX(edge1, &ip.Y)
 		}
 	}
 	return
@@ -3115,13 +3101,13 @@ func (c *Clipper) ProcessEdgesAtTopOfScanbeam(topY cInt) {
 		} else {
 			//2. promote horizontal edges, otherwise update Curr.X and Curr.Y ...
 			if c.IsIntermediate(e, topY) && c.IsHorizontal(e.NextInLML) {
-				c.UpdateEdgeIntoAEL(e)
+				e = c.UpdateEdgeIntoAEL(e)
 				if e.OutIdx >= 0 {
-					c.AddOutPt(e, e.Bot)
+					c.AddOutPt(e, &e.Bot)
 				}
 				c.AddEdgeToSEL(e)
 			} else {
-				e.Curr.X = c.TopX(e, &topY)
+				e.Curr.X = TopX(e, &topY)
 				e.Curr.Y = topY
 			}
 
@@ -3131,10 +3117,10 @@ func (c *Clipper) ProcessEdgesAtTopOfScanbeam(topY cInt) {
 					(ePrev.OutIdx >= 0) && (ePrev.Curr.X == e.Curr.X) &&
 					(ePrev.WindDelta != 0) {
 					ip := e.Curr.Copy()
-					c.SetZ(ip, ePrev, e)
-					op := c.AddOutPt(ePrev, ip)
-					op2 := c.AddOutPt(e, ip)
-					c.AddJoin(op, op2, ip) //StrictlySimple (type-3) join
+					c.SetZ(&ip, ePrev, e)
+					op := c.AddOutPt(ePrev, &ip)
+					op2 := c.AddOutPt(e, &ip)
+					c.AddJoin(op, op2, &ip) //StrictlySimple (type-3) join
 				}
 			}
 
@@ -3151,9 +3137,9 @@ func (c *Clipper) ProcessEdgesAtTopOfScanbeam(topY cInt) {
 		if c.IsIntermediate(e, topY) {
 			var op *OutPt
 			if e.OutIdx >= 0 {
-				op = c.AddOutPt(e, e.Top)
+				op = c.AddOutPt(e, &e.Top)
 			}
-			c.UpdateEdgeIntoAEL(e)
+			e = c.UpdateEdgeIntoAEL(e)
 
 			//if output polygons share an edge, they'll need joining later ...
 			ePrev := e.PrevInAEL
@@ -3163,15 +3149,15 @@ func (c *Clipper) ProcessEdgesAtTopOfScanbeam(topY cInt) {
 				ePrev.OutIdx >= 0 && ePrev.Curr.Y > ePrev.Top.Y &&
 				c.SlopesEqual(e, ePrev, c.m_UseFullRange) &&
 				(e.WindDelta != 0) && (ePrev.WindDelta != 0) {
-				op2 := c.AddOutPt(ePrev, e.Bot)
-				c.AddJoin(op, op2, e.Top)
+				op2 := c.AddOutPt(ePrev, &e.Bot)
+				c.AddJoin(op, op2, &e.Top)
 			} else if eNext != nil && eNext.Curr.X == e.Bot.X &&
 				eNext.Curr.Y == e.Bot.Y && op != nil &&
 				eNext.OutIdx >= 0 && eNext.Curr.Y > eNext.Top.Y &&
 				c.SlopesEqual(e, eNext, c.m_UseFullRange) &&
 				(e.WindDelta != 0) && (eNext.WindDelta != 0) {
-				op2 := c.AddOutPt(eNext, e.Bot)
-				c.AddJoin(op, op2, e.Top)
+				op2 := c.AddOutPt(eNext, &e.Bot)
+				c.AddJoin(op, op2, &e.Top)
 			}
 		}
 		e = e.NextInAEL
@@ -3184,7 +3170,7 @@ func (c *Clipper) DoMaxima(e *TEdge) {
 	eMaxPair := c.GetMaximaPair(e)
 	if eMaxPair == nil {
 		if e.OutIdx >= 0 {
-			c.AddOutPt(e, e.Top)
+			c.AddOutPt(e, &e.Top)
 		}
 		c.DeleteFromAEL(e)
 		return
@@ -3192,7 +3178,7 @@ func (c *Clipper) DoMaxima(e *TEdge) {
 
 	eNext := e.NextInAEL
 	for eNext != nil && eNext != eMaxPair {
-		c.IntersectEdges(e, eNext, e.Top, true)
+		c.IntersectEdges(e, eNext, &e.Top, true)
 		c.SwapPositionsInAEL(e, eNext)
 		eNext = e.NextInAEL
 	}
@@ -3202,20 +3188,20 @@ func (c *Clipper) DoMaxima(e *TEdge) {
 		c.DeleteFromAEL(eMaxPair)
 	} else if e.OutIdx >= 0 && eMaxPair.OutIdx >= 0 {
 		if e.OutIdx >= 0 {
-			c.AddLocalMaxPoly(e, eMaxPair, e.Top)
+			c.AddLocalMaxPoly(e, eMaxPair, &e.Top)
 		}
 		c.DeleteFromAEL(e)
 		c.DeleteFromAEL(eMaxPair)
 		//#if use_lines
 	} else if e.WindDelta == 0 {
 		if e.OutIdx >= 0 {
-			c.AddOutPt(e, e.Top)
+			c.AddOutPt(e, &e.Top)
 			e.OutIdx = Unassigned
 		}
 		c.DeleteFromAEL(e)
 
 		if eMaxPair.OutIdx >= 0 {
-			c.AddOutPt(eMaxPair, e.Top)
+			c.AddOutPt(eMaxPair, &e.Top)
 			eMaxPair.OutIdx = Unassigned
 		}
 		c.DeleteFromAEL(eMaxPair)
@@ -3266,7 +3252,7 @@ func (c *Clipper) PointCount(pts *OutPt) int {
 //------------------------------------------------------------------------------
 
 func (c *Clipper) BuildResult() Paths {
-	polyg := Paths(make([]Path, len(c.m_PolyOuts)))
+	polyg := Paths(make([]Path, 0, len(c.m_PolyOuts)))
 	for i := 0; i < len(c.m_PolyOuts); i++ {
 		outRec := c.m_PolyOuts[i]
 		if outRec.Pts == nil {
