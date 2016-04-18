@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ctessum/carto"
-	"github.com/twpayne/gogeom/geom"
+	"github.com/ctessum/geom"
+	"github.com/ctessum/geom/carto"
 )
 
 func init() {
@@ -92,23 +92,20 @@ func TestRandom(t *testing.T) {
 func different(a, b float64) bool {
 	if math.Abs(a-b)/b > 0.01 {
 		return true
-	} else {
-		return false
 	}
+	return false
 }
 
 func clipper2geom(data []Path) geom.T {
 	var out geom.T
-	var temp geom.Polygon
-	temp.Rings = make([][]geom.Point, len(data))
+	var temp geom.Polygon = make([][]geom.Point, len(data))
 	for i, r := range data {
-		temp.Rings[i] = make([]geom.Point, len(r))
+		temp[i] = make([]geom.Point, len(r))
 		for j, p := range r {
-			temp.Rings[i][j] = *geom.NewPoint(float64(p.X),
-				float64(p.Y))
+			temp[i][j] = *geom.NewPoint(float64(p.X), float64(p.Y))
 		}
 	}
-	if len(temp.Rings) != 0 {
+	if len(temp) != 0 {
 		out = temp
 	}
 	return out
