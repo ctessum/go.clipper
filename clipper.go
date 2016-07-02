@@ -4380,7 +4380,7 @@ func NewClipperOffset() *ClipperOffset {
 	co.m_polyNodes = NewPolyNode()
 	co.MiterLimit = 2.0
 	co.ArcTolerance = def_arc_tolerance
-	co.m_lowest.X = -1
+	co.m_lowest = NewIntPoint(-1, 0)
 	return co
 }
 
