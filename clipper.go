@@ -3673,7 +3673,7 @@ func (c *Clipper) JoinPoints(j *Join, outRec1, outRec2 *OutRec) bool {
 //returns 0 if false, +1 if true, -1 if pt ON polygon boundary
 //See "The Point in Polygon Problem for Arbitrary Polygons" by Hormann & Agathos
 //http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.88.5498&rep=rep1&type=pdf
-func (c *Clipper) PointInPolygon(pt *IntPoint, path Path) int {
+func PointInPolygon(pt *IntPoint, path Path) int {
 	result := 0
 	cnt := len(path)
 	if cnt < 3 {
