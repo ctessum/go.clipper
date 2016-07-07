@@ -31,18 +31,18 @@ func runOps(t *testing.T, testName string, subj, clip Paths) {
 	//subjArea := AreaCombined(subj)
 	//clipArea := AreaCombined(clip)
 
-	c := NewClipper(ioNone)
-	pft := pftEvenOdd
+	c := NewClipper(IoNone)
+	pft := PftEvenOdd
 
-	clipTypes := map[string]ClipType{"intersection": ctIntersection, "union": ctUnion, "xor": ctXor}
+	clipTypes := map[string]ClipType{"intersection": CtIntersection, "union": CtUnion, "xor": CtXor}
 	areas := make(map[string]float64)
 	// Load the polygons into Clipper and execute the boolean clip op ...
-	c.AddPaths(subj, ptSubject, true)
-	c.AddPaths(clip, ptClip, true)
+	c.AddPaths(subj, PtSubject, true)
+	c.AddPaths(clip, PtClip, true)
 	// fmt.Println("Subj", subj)
 	// fmt.Println("clip", clip)
 
-	var subjGeom, clipGeom, solutionGeom geom.T
+	var subjGeom, clipGeom, solutionGeom geom.Polygon
 	for clipType, ct := range clipTypes {
 		// fmt.Println("Running " + clipType)
 		solution, ok := c.Execute1(ct, pft, pft)
@@ -96,8 +96,8 @@ func different(a, b float64) bool {
 	return false
 }
 
-func clipper2geom(data []Path) geom.T {
-	var out geom.T
+func clipper2geom(data []Path) geom.Polygon {
+	var out geom.Polygon
 	var temp geom.Polygon = make([][]geom.Point, len(data))
 	for i, r := range data {
 		temp[i] = make([]geom.Point, len(r))
@@ -154,14 +154,14 @@ func TestExecute1(t *testing.T) {
 	for i, v := range testCases {
 		testName := fmt.Sprintf("fix%03d", i)
 		// fmt.Printf("--------------------%v-----------------\n", testName)
-		c := NewClipper(ioNone)
-		pft := pftEvenOdd
+		c := NewClipper(IoNone)
+		pft := PftEvenOdd
 
 		clipName := []string{"intersection", "union", "xor"}
-		clipTypes := []ClipType{ctIntersection, ctUnion, ctXor}
+		clipTypes := []ClipType{CtIntersection, CtUnion, CtXor}
 		// Load the polygons into Clipper and execute the boolean clip op ...
-		c.AddPaths(v.subj, ptSubject, true)
-		c.AddPaths(v.clip, ptClip, true)
+		c.AddPaths(v.subj, PtSubject, true)
+		c.AddPaths(v.clip, PtClip, true)
 		// fmt.Println("Subj", v.subj)
 		// fmt.Println("clip", v.clip)
 

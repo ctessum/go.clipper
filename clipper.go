@@ -269,17 +269,17 @@ func (ir *IntRect) Copy() IntRect {
 type ClipType int
 
 const (
-	ctIntersection ClipType = iota
-	ctUnion
-	ctDifference
-	ctXor
+	CtIntersection ClipType = iota
+	CtUnion
+	CtDifference
+	CtXor
 )
 
 type PolyType int
 
 const (
-	ptSubject PolyType = iota
-	ptClip
+	PtSubject PolyType = iota
+	PtClip
 )
 
 //By far the most widely used winding rules for polygon filling are
@@ -289,42 +289,42 @@ const (
 type PolyFillType int
 
 const (
-	pftEvenOdd PolyFillType = iota
-	pftNonZero
-	pftPositive
-	pftNegative
+	PftEvenOdd PolyFillType = iota
+	PftNonZero
+	PftPositive
+	PftNegative
 )
 
 type JoinType int
 
 const (
-	jtSquare JoinType = iota
-	jtRound
-	jtMiter
+	JtSquare JoinType = iota
+	JtRound
+	JtMiter
 )
 
 type EndType int
 
 const (
-	etClosedPolygon EndType = iota
-	etClosedLine
-	etOpenButt
-	etOpenSquare
-	etOpenRound
+	EtClosedPolygon EndType = iota
+	EtClosedLine
+	EtOpenButt
+	EtOpenSquare
+	EtOpenRound
 )
 
 type EdgeSide int
 
 const (
-	esLeft EdgeSide = iota
-	esRight
+	EsLeft EdgeSide = iota
+	EsRight
 )
 
 type Direction int
 
 const (
-	dRightToLeft Direction = iota
-	dLeftToRight
+	DRightToLeft Direction = iota
+	DLeftToRight
 )
 
 type TEdge struct {
@@ -822,7 +822,7 @@ func (c *ClipperBase) ProcessBound(E *TEdge, IsClockwise bool) *TEdge {
 //------------------------------------------------------------------------------
 
 func (c *ClipperBase) AddPath(pg Path, polyType PolyType, Closed bool) bool {
-	if !Closed && polyType == ptClip {
+	if !Closed && polyType == PtClip {
 		panic(NewClipperException("AddPath: Open paths must be subject."))
 	}
 
@@ -937,7 +937,7 @@ func (c *ClipperBase) AddPath(pg Path, polyType PolyType, Closed bool) bool {
 		locMin.Y = E.Bot.Y
 		locMin.LeftBound = nil
 		locMin.RightBound = E
-		locMin.RightBound.Side = esRight
+		locMin.RightBound.Side = EsRight
 		locMin.RightBound.WindDelta = 0
 		for E.Next.OutIdx != Skip {
 			E.NextInLML = E.Next
@@ -976,8 +976,8 @@ func (c *ClipperBase) AddPath(pg Path, polyType PolyType, Closed bool) bool {
 			locMin.RightBound = E.Prev
 			clockwise = true //Q.nextInLML = Q.next
 		}
-		locMin.LeftBound.Side = esLeft
-		locMin.RightBound.Side = esRight
+		locMin.LeftBound.Side = EsLeft
+		locMin.RightBound.Side = EsRight
 
 		if !Closed {
 			locMin.LeftBound.WindDelta = 0
@@ -1093,13 +1093,13 @@ func (c *ClipperBase) Reset() {
 		e := lm.LeftBound
 		if e != nil {
 			e.Curr = e.Bot
-			e.Side = esLeft
+			e.Side = EsLeft
 			e.OutIdx = Unassigned
 		}
 		e = lm.RightBound
 		if e != nil {
 			e.Curr = e.Bot
-			e.Side = esRight
+			e.Side = EsRight
 			e.OutIdx = Unassigned
 		}
 		lm = lm.Next
@@ -1144,10 +1144,10 @@ func GetBounds(paths Paths) *IntRect {
 type InitOptions int
 
 const (
-	ioNone              InitOptions = 0
-	ioReverseSolution   InitOptions = 1
-	ioStrictlySimple    InitOptions = 2
-	ioPreserveCollinear InitOptions = 4
+	IoNone              InitOptions = 0
+	IoReverseSolution   InitOptions = 1
+	IoStrictlySimple    InitOptions = 2
+	IoPreserveCollinear InitOptions = 4
 )
 
 type TZFillCallback interface {
@@ -1187,9 +1187,9 @@ func NewClipper(initOptions InitOptions) *Clipper {
 	c.m_PolyOuts = make([]*OutRec, 0)
 	c.m_Joins = make([]*Join, 0)
 	c.m_GhostJoins = make([]*Join, 0)
-	c.ReverseSolution = (ioReverseSolution == initOptions)
-	c.StrictlySimple = (ioStrictlySimple == initOptions)
-	c.PreserveCollinear = (ioPreserveCollinear == initOptions)
+	c.ReverseSolution = (IoReverseSolution == initOptions)
+	c.StrictlySimple = (IoStrictlySimple == initOptions)
+	c.PreserveCollinear = (IoPreserveCollinear == initOptions)
 	return c
 }
 
@@ -1214,13 +1214,13 @@ func (c *Clipper) Reset() {
 			e := lm.LeftBound
 			if e != nil {
 				e.Curr = e.Bot
-				e.Side = esLeft
+				e.Side = EsLeft
 				e.OutIdx = Unassigned
 			}
 			e = lm.RightBound
 			if e != nil {
 				e.Curr = e.Bot
-				e.Side = esRight
+				e.Side = EsRight
 				e.OutIdx = Unassigned
 			}
 			lm = lm.Next
@@ -1575,20 +1575,20 @@ func (c *Clipper) E2InsertsBeforeE1(e1, e2 *TEdge) bool {
 //------------------------------------------------------------------------------
 
 func (c *Clipper) IsEvenOddFillType(edge *TEdge) bool {
-	if edge.PolyTyp == ptSubject {
-		return c.m_SubjFillType == pftEvenOdd
+	if edge.PolyTyp == PtSubject {
+		return c.m_SubjFillType == PftEvenOdd
 	} else {
-		return c.m_ClipFillType == pftEvenOdd
+		return c.m_ClipFillType == PftEvenOdd
 	}
 }
 
 //------------------------------------------------------------------------------
 
 func (c *Clipper) IsEvenOddAltFillType(edge *TEdge) bool {
-	if edge.PolyTyp == ptSubject {
-		return c.m_ClipFillType == pftEvenOdd
+	if edge.PolyTyp == PtSubject {
+		return c.m_ClipFillType == PftEvenOdd
 	} else {
-		return c.m_SubjFillType == pftEvenOdd
+		return c.m_SubjFillType == PftEvenOdd
 	}
 }
 
@@ -1596,7 +1596,7 @@ func (c *Clipper) IsEvenOddAltFillType(edge *TEdge) bool {
 
 func (c *Clipper) IsContributing(edge *TEdge) bool {
 	var pft, pft2 PolyFillType
-	if edge.PolyTyp == ptSubject {
+	if edge.PolyTyp == PtSubject {
 		pft = c.m_SubjFillType
 		pft2 = c.m_ClipFillType
 	} else {
@@ -1605,23 +1605,23 @@ func (c *Clipper) IsContributing(edge *TEdge) bool {
 	}
 
 	switch pft {
-	case pftEvenOdd:
+	case PftEvenOdd:
 		//return false if a subj line has been flagged as inside a subj polygon
 		if edge.WindDelta == 0 && edge.WindCnt != 1 {
 			return false
 		}
 		break
-	case pftNonZero:
+	case PftNonZero:
 		if intAbs(edge.WindCnt) != 1 {
 			return false
 		}
 		break
-	case pftPositive:
+	case PftPositive:
 		if edge.WindCnt != 1 {
 			return false
 		}
 		break
-	default: //PolyFillType.pftNegative
+	default: //PolyFillType.PftNegative
 		if edge.WindCnt != -1 {
 			return false
 		}
@@ -1629,50 +1629,50 @@ func (c *Clipper) IsContributing(edge *TEdge) bool {
 	}
 
 	switch c.m_ClipType {
-	case ctIntersection:
+	case CtIntersection:
 		switch pft2 {
-		case pftEvenOdd, pftNonZero:
+		case PftEvenOdd, PftNonZero:
 			return (edge.WindCnt2 != 0)
-		case pftPositive:
+		case PftPositive:
 			return (edge.WindCnt2 > 0)
 		default:
 			return (edge.WindCnt2 < 0)
 		}
-	case ctUnion:
+	case CtUnion:
 		switch pft2 {
-		case pftEvenOdd, pftNonZero:
+		case PftEvenOdd, PftNonZero:
 			return (edge.WindCnt2 == 0)
-		case pftPositive:
+		case PftPositive:
 			return (edge.WindCnt2 <= 0)
 		default:
 			return (edge.WindCnt2 >= 0)
 		}
-	case ctDifference:
-		if edge.PolyTyp == ptSubject {
+	case CtDifference:
+		if edge.PolyTyp == PtSubject {
 			switch pft2 {
-			case pftEvenOdd, pftNonZero:
+			case PftEvenOdd, PftNonZero:
 				return (edge.WindCnt2 == 0)
-			case pftPositive:
+			case PftPositive:
 				return (edge.WindCnt2 <= 0)
 			default:
 				return (edge.WindCnt2 >= 0)
 			}
 		} else {
 			switch pft2 {
-			case pftEvenOdd, pftNonZero:
+			case PftEvenOdd, PftNonZero:
 				return (edge.WindCnt2 != 0)
-			case pftPositive:
+			case PftPositive:
 				return (edge.WindCnt2 > 0)
 			default:
 				return (edge.WindCnt2 < 0)
 			}
 		}
-	case ctXor:
+	case CtXor:
 		if edge.WindDelta == 0 { //XOr always contributing unless open
 			switch pft2 {
-			case pftEvenOdd, pftNonZero:
+			case PftEvenOdd, PftNonZero:
 				return (edge.WindCnt2 == 0)
-			case pftPositive:
+			case PftPositive:
 				return (edge.WindCnt2 <= 0)
 			default:
 				return (edge.WindCnt2 >= 0)
@@ -1700,7 +1700,7 @@ func (c *Clipper) SetWindingCount(edge *TEdge) {
 		}
 		edge.WindCnt2 = 0
 		e = c.m_ActiveEdges //ie get ready to calc WindCnt2
-	} else if edge.WindDelta == 0 && c.m_ClipType != ctUnion {
+	} else if edge.WindDelta == 0 && c.m_ClipType != CtUnion {
 		edge.WindCnt = 1
 		edge.WindCnt2 = e.WindCnt2
 		e = e.NextInAEL //ie get ready to calc WindCnt2
@@ -1972,8 +1972,8 @@ func (c *Clipper) AddLocalMinPoly(e1, e2 *TEdge, pt *IntPoint) *OutPt {
 	if c.IsHorizontal(e2) || (e1.Dx > e2.Dx) {
 		result = c.AddOutPt(e1, pt)
 		e2.OutIdx = e1.OutIdx
-		e1.Side = esLeft
-		e2.Side = esRight
+		e1.Side = EsLeft
+		e2.Side = EsRight
 		e = e1
 		if e.PrevInAEL == e2 {
 			prevE = e2.PrevInAEL
@@ -1983,8 +1983,8 @@ func (c *Clipper) AddLocalMinPoly(e1, e2 *TEdge, pt *IntPoint) *OutPt {
 	} else {
 		result = c.AddOutPt(e2, pt)
 		e1.OutIdx = e2.OutIdx
-		e1.Side = esRight
-		e2.Side = esLeft
+		e1.Side = EsRight
+		e2.Side = EsLeft
 		e = e2
 		if e.PrevInAEL == e1 {
 			prevE = e1.PrevInAEL
@@ -2022,7 +2022,7 @@ func (c *Clipper) CreateOutRec() *OutRec {
 //------------------------------------------------------------------------------
 
 func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
-	ToFront := (e.Side == esLeft)
+	ToFront := (e.Side == EsLeft)
 	if e.OutIdx < 0 {
 		outRec := c.CreateOutRec()
 		outRec.IsOpen = (e.WindDelta == 0)
@@ -2246,8 +2246,8 @@ func (c *Clipper) AppendPolygon(e1, e2 *TEdge) {
 
 	var side EdgeSide
 	//join e2 poly onto e1 poly and delete pointers to e2 ...
-	if e1.Side == esLeft {
-		if e2.Side == esLeft {
+	if e1.Side == EsLeft {
+		if e2.Side == EsLeft {
 			//z y x a b c
 			c.ReversePolyPtLinks(p2_lft)
 			p2_lft.Next = p1_lft
@@ -2263,9 +2263,9 @@ func (c *Clipper) AppendPolygon(e1, e2 *TEdge) {
 			p1_rt.Next = p2_lft
 			outRec1.Pts = p2_lft
 		}
-		side = esLeft
+		side = EsLeft
 	} else {
-		if e2.Side == esRight {
+		if e2.Side == EsRight {
 			//a b c z y x
 			c.ReversePolyPtLinks(p2_lft)
 			p1_rt.Next = p2_rt
@@ -2279,7 +2279,7 @@ func (c *Clipper) AppendPolygon(e1, e2 *TEdge) {
 			p1_lft.Prev = p2_rt
 			p2_rt.Next = p1_lft
 		}
-		side = esRight
+		side = EsRight
 	}
 
 	outRec1.BottomPt = nil
@@ -2374,7 +2374,7 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 			}
 			//if intersecting a subj line with a subj poly ...
 		} else if e1.PolyTyp == e2.PolyTyp &&
-			e1.WindDelta != e2.WindDelta && c.m_ClipType == ctUnion {
+			e1.WindDelta != e2.WindDelta && c.m_ClipType == CtUnion {
 			if e1.WindDelta == 0 {
 				if e2Contributing {
 					c.AddOutPt(e1, pt)
@@ -2392,13 +2392,13 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 			}
 		} else if e1.PolyTyp != e2.PolyTyp {
 			if (e1.WindDelta == 0) && intAbs(e2.WindCnt) == 1 &&
-				(c.m_ClipType != ctUnion || e2.WindCnt2 == 0) {
+				(c.m_ClipType != CtUnion || e2.WindCnt2 == 0) {
 				c.AddOutPt(e1, pt)
 				if e1Contributing {
 					e1.OutIdx = Unassigned
 				}
 			} else if (e2.WindDelta == 0) && (intAbs(e1.WindCnt) == 1) &&
-				(c.m_ClipType != ctUnion || e1.WindCnt2 == 0) {
+				(c.m_ClipType != CtUnion || e1.WindCnt2 == 0) {
 				c.AddOutPt(e2, pt)
 				if e2Contributing {
 					e2.OutIdx = Unassigned
@@ -2465,14 +2465,14 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 	}
 
 	var e1FillType, e2FillType, e1FillType2, e2FillType2 PolyFillType
-	if e1.PolyTyp == ptSubject {
+	if e1.PolyTyp == PtSubject {
 		e1FillType = c.m_SubjFillType
 		e1FillType2 = c.m_ClipFillType
 	} else {
 		e1FillType = c.m_ClipFillType
 		e1FillType2 = c.m_SubjFillType
 	}
-	if e2.PolyTyp == ptSubject {
+	if e2.PolyTyp == PtSubject {
 		e2FillType = c.m_SubjFillType
 		e2FillType2 = c.m_ClipFillType
 	} else {
@@ -2482,10 +2482,10 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 
 	var e1Wc, e2Wc int
 	switch e1FillType {
-	case pftPositive:
+	case PftPositive:
 		e1Wc = e1.WindCnt
 		break
-	case pftNegative:
+	case PftNegative:
 		e1Wc = -e1.WindCnt
 		break
 	default:
@@ -2493,10 +2493,10 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 		break
 	}
 	switch e2FillType {
-	case pftPositive:
+	case PftPositive:
 		e2Wc = e2.WindCnt
 		break
-	case pftNegative:
+	case PftNegative:
 		e2Wc = -e2.WindCnt
 		break
 	default:
@@ -2507,7 +2507,7 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 	if e1Contributing && e2Contributing {
 		if e1stops || e2stops ||
 			(e1Wc != 0 && e1Wc != 1) || (e2Wc != 0 && e2Wc != 1) ||
-			(e1.PolyTyp != e2.PolyTyp && c.m_ClipType != ctXor) {
+			(e1.PolyTyp != e2.PolyTyp && c.m_ClipType != CtXor) {
 			c.AddLocalMaxPoly(e1, e2, pt)
 		} else {
 			c.AddOutPt(e1, pt)
@@ -2533,10 +2533,10 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 		//neither edge is currently contributing ...
 		var e1Wc2, e2Wc2 int
 		switch e1FillType2 {
-		case pftPositive:
+		case PftPositive:
 			e1Wc2 = e1.WindCnt2
 			break
-		case pftNegative:
+		case PftNegative:
 			e1Wc2 = -e1.WindCnt2
 			break
 		default:
@@ -2544,10 +2544,10 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 			break
 		}
 		switch e2FillType2 {
-		case pftPositive:
+		case PftPositive:
 			e2Wc2 = e2.WindCnt2
 			break
-		case pftNegative:
+		case PftNegative:
 			e2Wc2 = -e2.WindCnt2
 			break
 		default:
@@ -2559,23 +2559,23 @@ func (c *Clipper) IntersectEdges(e1, e2 *TEdge, pt *IntPoint, protect bool) {
 			c.AddLocalMinPoly(e1, e2, pt)
 		} else if e1Wc == 1 && e2Wc == 1 {
 			switch c.m_ClipType {
-			case ctIntersection:
+			case CtIntersection:
 				if e1Wc2 > 0 && e2Wc2 > 0 {
 					c.AddLocalMinPoly(e1, e2, pt)
 					break
 				}
-			case ctUnion:
+			case CtUnion:
 				if e1Wc2 <= 0 && e2Wc2 <= 0 {
 					c.AddLocalMinPoly(e1, e2, pt)
 					break
 				}
-			case ctDifference:
-				if ((e1.PolyTyp == ptClip) && (e1Wc2 > 0) && (e2Wc2 > 0)) ||
-					((e1.PolyTyp == ptSubject) && (e1Wc2 <= 0) && (e2Wc2 <= 0)) {
+			case CtDifference:
+				if ((e1.PolyTyp == PtClip) && (e1Wc2 > 0) && (e2Wc2 > 0)) ||
+					((e1.PolyTyp == PtSubject) && (e1Wc2 <= 0) && (e2Wc2 <= 0)) {
 					c.AddLocalMinPoly(e1, e2, pt)
 					break
 				}
-			case ctXor:
+			case CtXor:
 				c.AddLocalMinPoly(e1, e2, pt)
 				break
 			}
@@ -2687,11 +2687,11 @@ func (c *Clipper) GetHorzDirection(HorzEdge *TEdge, Dir *Direction, Left, Right 
 	if HorzEdge.Bot.X < HorzEdge.Top.X {
 		*Left = HorzEdge.Bot.X
 		*Right = HorzEdge.Top.X
-		*Dir = dLeftToRight
+		*Dir = DLeftToRight
 	} else {
 		*Left = HorzEdge.Top.X
 		*Right = HorzEdge.Bot.X
-		*Dir = dRightToLeft
+		*Dir = DRightToLeft
 	}
 }
 
@@ -2725,8 +2725,8 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 
 			eNext := c.GetNextInAEL(e, dir) //saves eNext for later
 
-			if (dir == dLeftToRight && e.Curr.X <= horzRight) ||
-				(dir == dRightToLeft && e.Curr.X >= horzLeft) {
+			if (dir == DLeftToRight && e.Curr.X <= horzRight) ||
+				(dir == DRightToLeft && e.Curr.X >= horzLeft) {
 				//so far we're still in range of the horizontal Edge  but make sure
 				//we're at the last of consec. horizontals when matching with eMaxPair
 				if e == eMaxPair && IsLastHorz {
@@ -2748,7 +2748,7 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 					c.DeleteFromAEL(horzEdge)
 					c.DeleteFromAEL(eMaxPair)
 					return
-				} else if dir == dLeftToRight {
+				} else if dir == DLeftToRight {
 					Pt := &IntPoint{e.Curr.X, horzEdge.Curr.Y}
 					c.IntersectEdges(horzEdge, e, Pt, true)
 				} else {
@@ -2756,8 +2756,8 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 					c.IntersectEdges(e, horzEdge, Pt, true)
 				}
 				c.SwapPositionsInAEL(horzEdge, e)
-			} else if (dir == dLeftToRight && e.Curr.X >= horzRight) ||
-				(dir == dRightToLeft && e.Curr.X <= horzLeft) {
+			} else if (dir == DLeftToRight && e.Curr.X >= horzRight) ||
+				(dir == DRightToLeft && e.Curr.X <= horzLeft) {
 				break
 			}
 			e = eNext
@@ -2815,7 +2815,7 @@ func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 //------------------------------------------------------------------------------
 
 func (c *Clipper) GetNextInAEL(e *TEdge, direction Direction) *TEdge {
-	if direction == dLeftToRight {
+	if direction == DLeftToRight {
 		return e.NextInAEL
 	} else {
 		return e.PrevInAEL
@@ -3399,15 +3399,15 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 	Pt *IntPoint, DiscardLeft bool) bool {
 	var Dir1 Direction
 	if op1.Pt.X > op1b.Pt.X {
-		Dir1 = dRightToLeft
+		Dir1 = DRightToLeft
 	} else {
-		Dir1 = dLeftToRight
+		Dir1 = DLeftToRight
 	}
 	var Dir2 Direction
 	if op2.Pt.X > op2b.Pt.X {
-		Dir2 = dRightToLeft
+		Dir2 = DRightToLeft
 	} else {
-		Dir2 = dLeftToRight
+		Dir2 = DLeftToRight
 	}
 	if Dir1 == Dir2 {
 		return false
@@ -3418,7 +3418,7 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 	//So, to facilitate this while inserting Op1b and Op2b ...
 	//when DiscardLeft, make sure we're AT or RIGHT of Pt before adding Op1b,
 	//otherwise make sure we're AT or LEFT of Pt. (Likewise with Op2b.)
-	if Dir1 == dLeftToRight {
+	if Dir1 == DLeftToRight {
 		for op1.Next.Pt.X <= Pt.X &&
 			op1.Next.Pt.X >= op1.Pt.X && op1.Next.Pt.Y == Pt.Y {
 			op1 = op1.Next
@@ -3448,7 +3448,7 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 		}
 	}
 
-	if Dir2 == dLeftToRight {
+	if Dir2 == DLeftToRight {
 		for op2.Next.Pt.X <= Pt.X &&
 			op2.Next.Pt.X >= op2.Pt.X && op2.Next.Pt.Y == Pt.Y {
 			op2 = op2.Next
@@ -3478,7 +3478,7 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 		}
 	}
 
-	if (Dir1 == dLeftToRight) == DiscardLeft {
+	if (Dir1 == DLeftToRight) == DiscardLeft {
 		op1.Prev = op2
 		op2.Next = op1
 		op1b.Next = op2b
@@ -3673,7 +3673,7 @@ func (c *Clipper) JoinPoints(j *Join, outRec1, outRec2 *OutRec) bool {
 //returns 0 if false, +1 if true, -1 if pt ON polygon boundary
 //See "The Point in Polygon Problem for Arbitrary Polygons" by Hormann & Agathos
 //http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.88.5498&rep=rep1&type=pdf
-func (c *Clipper) PointInPolygon(pt *IntPoint, path Path) int {
+func PointInPolygon(pt *IntPoint, path Path) int {
 	result := 0
 	cnt := len(path)
 	if cnt < 3 {
@@ -4062,27 +4062,27 @@ func (c *Clipper) area(outRec *OutRec) float64 {
 // SimplifyPolygon functions ...
 // Convert self-intersecting polygons into simple polygons
 //------------------------------------------------------------------------------
-// default fillType = pftEvenOdd
+// default fillType = PftEvenOdd
 func (c *Clipper) SimplifyPolygon(poly Path,
 	fillType PolyFillType) Paths {
 	var result Paths
-	c2 := NewClipper(ioNone)
+	c2 := NewClipper(IoNone)
 	c2.StrictlySimple = true
-	c2.AddPath(poly, ptSubject, true)
-	result, _ = c2.Execute1(ctUnion, fillType, fillType)
+	c2.AddPath(poly, PtSubject, true)
+	result, _ = c2.Execute1(CtUnion, fillType, fillType)
 	return result
 }
 
 //------------------------------------------------------------------------------
 
-// default fillType = pftEvenOdd
+// default fillType = PftEvenOdd
 func (c *Clipper) SimplifyPolygons(polys Paths,
 	fillType PolyFillType) Paths {
 	var result Paths
-	c2 := NewClipper(ioNone)
+	c2 := NewClipper(IoNone)
 	c2.StrictlySimple = true
-	c2.AddPaths(polys, ptSubject, true)
-	result, _ = c2.Execute1(ctUnion, fillType, fillType)
+	c2.AddPaths(polys, PtSubject, true)
+	result, _ = c2.Execute1(CtUnion, fillType, fillType)
 	return result
 }
 
@@ -4252,9 +4252,9 @@ func (c *Clipper) Minkowski(pattern, path Path, IsSum, IsClosed bool) Paths {
 
 func (c *Clipper) MinkowskiSum(pattern, path Path, pathIsClosed bool) Paths {
 	paths := c.Minkowski(pattern, path, true, pathIsClosed)
-	c2 := NewClipper(ioNone)
-	c2.AddPaths(paths, ptSubject, true)
-	paths, _ = c2.Execute1(ctUnion, pftNonZero, pftNonZero)
+	c2 := NewClipper(IoNone)
+	c2.AddPaths(paths, PtSubject, true)
+	paths, _ = c2.Execute1(CtUnion, PftNonZero, PftNonZero)
 	return paths
 }
 
@@ -4272,16 +4272,16 @@ func (c *Clipper) TranslatePath(path Path, delta *IntPoint) Path {
 
 func (c *Clipper) MinkowskiSumAll(pattern Path, paths Paths, pathIsClosed bool) Paths {
 	var solution Paths
-	c2 := NewClipper(ioNone)
+	c2 := NewClipper(IoNone)
 	for i := 0; i < len(paths); i++ {
 		tmp := c.Minkowski(pattern, paths[i], true, pathIsClosed)
-		c.AddPaths(tmp, ptSubject, true)
+		c.AddPaths(tmp, PtSubject, true)
 		if pathIsClosed {
 			path := c.TranslatePath(paths[i], pattern[0])
-			c.AddPath(path, ptClip, true)
+			c.AddPath(path, PtClip, true)
 		}
 	}
-	solution, _ = c2.Execute1(ctUnion, pftNonZero, pftNonZero)
+	solution, _ = c2.Execute1(CtUnion, PftNonZero, PftNonZero)
 	return solution
 }
 
@@ -4289,9 +4289,9 @@ func (c *Clipper) MinkowskiSumAll(pattern Path, paths Paths, pathIsClosed bool) 
 
 func (c *Clipper) MinkowskiDiff(poly1, poly2 Path) Paths {
 	paths := c.Minkowski(poly1, poly2, false, true)
-	c2 := NewClipper(ioNone)
-	c2.AddPaths(paths, ptSubject, true)
-	paths, _ = c2.Execute1(ctUnion, pftNonZero, pftNonZero)
+	c2 := NewClipper(IoNone)
+	c2.AddPaths(paths, PtSubject, true)
+	paths, _ = c2.Execute1(CtUnion, PftNonZero, PftNonZero)
 	return paths
 }
 
@@ -4380,7 +4380,7 @@ func NewClipperOffset() *ClipperOffset {
 	co.m_polyNodes = NewPolyNode()
 	co.MiterLimit = 2.0
 	co.ArcTolerance = def_arc_tolerance
-	co.m_lowest.X = -1
+	co.m_lowest = NewIntPoint(-1, 0)
 	return co
 }
 
@@ -4411,7 +4411,7 @@ func (co *ClipperOffset) AddPath(path Path, joinType JoinType, endType EndType) 
 	newNode.m_endtype = endType
 
 	//strip duplicate points from path and also get index to the lowest point ...
-	if endType == etClosedLine || endType == etClosedPolygon {
+	if endType == EtClosedLine || endType == EtClosedPolygon {
 		for highI > 0 && path[0] == path[highI] {
 			highI--
 		}
@@ -4431,14 +4431,14 @@ func (co *ClipperOffset) AddPath(path Path, joinType JoinType, endType EndType) 
 			}
 		}
 	}
-	if endType == etClosedPolygon && j < 2 {
+	if endType == EtClosedPolygon && j < 2 {
 		return
 	}
 
 	co.m_polyNodes.AddChild(newNode)
 
 	//if this path's lowest pt is lower than all the others then update m_lowest
-	if endType != etClosedPolygon {
+	if endType != EtClosedPolygon {
 		return
 	}
 	if co.m_lowest.X < 0 {
@@ -4470,8 +4470,8 @@ func (co *ClipperOffset) FixOrientations() {
 		!Orientation(co.m_polyNodes.m_Childs[int(co.m_lowest.X)].m_polygon) {
 		for i := 0; i < co.m_polyNodes.ChildCount(); i++ {
 			node := co.m_polyNodes.m_Childs[i]
-			if node.m_endtype == etClosedPolygon ||
-				(node.m_endtype == etClosedLine &&
+			if node.m_endtype == EtClosedPolygon ||
+				(node.m_endtype == EtClosedLine &&
 					Orientation(node.m_polygon)) {
 				reversePath(node.m_polygon)
 			}
@@ -4479,7 +4479,7 @@ func (co *ClipperOffset) FixOrientations() {
 	} else {
 		for i := 0; i < co.m_polyNodes.ChildCount(); i++ {
 			node := co.m_polyNodes.m_Childs[i]
-			if node.m_endtype == etClosedLine &&
+			if node.m_endtype == EtClosedLine &&
 				!Orientation(node.m_polygon) {
 				reversePath(node.m_polygon)
 			}
@@ -4512,7 +4512,7 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 	if near_zero(delta) {
 		for i := 0; i < co.m_polyNodes.ChildCount(); i++ {
 			node := co.m_polyNodes.m_Childs[i]
-			if node.m_endtype == etClosedPolygon {
+			if node.m_endtype == EtClosedPolygon {
 				co.m_destPolys = append(co.m_destPolys, node.m_polygon)
 			}
 		}
@@ -4550,14 +4550,14 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 		length := len(co.m_srcPoly)
 
 		if length == 0 || (delta <= 0 && (length < 3 ||
-			node.m_endtype != etClosedPolygon)) {
+			node.m_endtype != EtClosedPolygon)) {
 			continue
 		}
 
 		co.m_destPoly = Path(make([]*IntPoint, 0, int(steps)+4))
 
 		if length == 1 {
-			if node.m_jointype == jtRound {
+			if node.m_jointype == JtRound {
 				X := 1.0
 				Y := 0.0
 				for j := 1; j <= int(steps); j++ {
@@ -4594,8 +4594,8 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 			co.m_normals = append(co.m_normals,
 				co.GetUnitNormal(co.m_srcPoly[j], co.m_srcPoly[j+1]))
 		}
-		if node.m_endtype == etClosedLine ||
-			node.m_endtype == etClosedPolygon {
+		if node.m_endtype == EtClosedLine ||
+			node.m_endtype == EtClosedPolygon {
 			co.m_normals = append(co.m_normals,
 				co.GetUnitNormal(co.m_srcPoly[length-1], co.m_srcPoly[0]))
 		} else {
@@ -4603,13 +4603,13 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 				CopyDoublePoint(co.m_normals[length-2]))
 		}
 
-		if node.m_endtype == etClosedPolygon {
+		if node.m_endtype == EtClosedPolygon {
 			k := length - 1
 			for j := 0; j < length; j++ {
 				co.OffsetPoint(j, &k, node.m_jointype)
 			}
 			co.m_destPolys = append(co.m_destPolys, co.m_destPoly)
-		} else if node.m_endtype == etClosedLine {
+		} else if node.m_endtype == EtClosedLine {
 			k := length - 1
 			for j := 0; j < length; j++ {
 				co.OffsetPoint(j, &k, node.m_jointype)
@@ -4634,7 +4634,7 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 			}
 
 			var pt1 *IntPoint
-			if node.m_endtype == etOpenButt {
+			if node.m_endtype == EtOpenButt {
 				j := length - 1
 				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[j].X) +
 					co.m_normals[j].X*delta)),
@@ -4652,7 +4652,7 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 				co.m_sinA = 0
 				co.m_normals[j] = &DoublePoint{-co.m_normals[j].X,
 					-co.m_normals[j].Y}
-				if node.m_endtype == etOpenSquare {
+				if node.m_endtype == EtOpenSquare {
 					co.DoSquare(j, k)
 				} else {
 					co.DoRound(j, k)
@@ -4671,7 +4671,7 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 				co.OffsetPoint(j, &k, node.m_jointype)
 			}
 
-			if node.m_endtype == etOpenButt {
+			if node.m_endtype == EtOpenButt {
 				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[0].X) -
 					co.m_normals[0].X*delta)),
 					cInt(co.Round(float64(co.m_srcPoly[0].Y) -
@@ -4685,7 +4685,7 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 			} else {
 				k = 1
 				co.m_sinA = 0
-				if node.m_endtype == etOpenSquare {
+				if node.m_endtype == EtOpenSquare {
 					co.DoSquare(0, 1)
 				} else {
 					co.DoRound(0, 1)
@@ -4703,11 +4703,11 @@ func (co *ClipperOffset) Execute(delta float64) (solution Paths) {
 	co.FixOrientations()
 	co.DoOffset(delta)
 	//now clean up 'corners' ...
-	clpr := NewClipper(ioNone)
-	clpr.AddPaths(co.m_destPolys, ptSubject, true)
+	clpr := NewClipper(IoNone)
+	clpr.AddPaths(co.m_destPolys, PtSubject, true)
 	if delta > 0 {
-		solution, _ = clpr.Execute1(ctUnion,
-			pftPositive, pftPositive)
+		solution, _ = clpr.Execute1(CtUnion,
+			PftPositive, PftPositive)
 	} else {
 		r := GetBounds(co.m_destPolys)
 		outer := Path(make([]*IntPoint, 4))
@@ -4717,9 +4717,9 @@ func (co *ClipperOffset) Execute(delta float64) (solution Paths) {
 		outer[2] = &IntPoint{r.right + 10, r.top - 10}
 		outer[3] = &IntPoint{r.left - 10, r.top - 10}
 
-		clpr.AddPath(outer, ptSubject, true)
+		clpr.AddPath(outer, PtSubject, true)
 		clpr.ReverseSolution = true
-		solution, _ = clpr.Execute1(ctUnion, pftNegative, pftNegative)
+		solution, _ = clpr.Execute1(CtUnion, PftNegative, PftNegative)
 		if len(solution) > 0 {
 			solution = solution[1:]
 		}
@@ -4735,11 +4735,11 @@ func (co *ClipperOffset) Execute2(delta float64) (solution *PolyTree) {
 	co.DoOffset(delta)
 
 	//now clean up 'corners' ...
-	clpr := NewClipper(ioNone)
-	clpr.AddPaths(co.m_destPolys, ptSubject, true)
+	clpr := NewClipper(IoNone)
+	clpr.AddPaths(co.m_destPolys, PtSubject, true)
 	if delta > 0 {
-		solution, _ = clpr.Execute2(ctUnion,
-			pftPositive, pftPositive)
+		solution, _ = clpr.Execute2(CtUnion,
+			PftPositive, PftPositive)
 	} else {
 		r := GetBounds(co.m_destPolys)
 		outer := Path(make([]*IntPoint, 4))
@@ -4749,9 +4749,9 @@ func (co *ClipperOffset) Execute2(delta float64) (solution *PolyTree) {
 		outer[2] = &IntPoint{r.right + 10, r.top - 10}
 		outer[3] = &IntPoint{r.left - 10, r.top - 10}
 
-		clpr.AddPath(outer, ptSubject, true)
+		clpr.AddPath(outer, PtSubject, true)
 		clpr.ReverseSolution = true
-		solution, _ = clpr.Execute2(ctUnion, pftNegative, pftNegative)
+		solution, _ = clpr.Execute2(CtUnion, PftNegative, PftNegative)
 		//remove the outer PolyNode rectangle ...
 		if solution.ChildCount() == 1 && solution.m_Childs[0].ChildCount() > 0 {
 			outerNode := solution.m_Childs[0]
@@ -4800,7 +4800,7 @@ func (co *ClipperOffset) OffsetPoint(j int, k *int, jointype JoinType) {
 			co.Round(float64(co.m_srcPoly[j].Y) + co.m_normals[j].Y*co.m_delta)})
 	} else {
 		switch jointype {
-		case jtMiter:
+		case JtMiter:
 			{
 				r := 1 + (co.m_normals[j].X*co.m_normals[*k].X +
 					co.m_normals[j].Y*co.m_normals[*k].Y)
@@ -4811,10 +4811,10 @@ func (co *ClipperOffset) OffsetPoint(j int, k *int, jointype JoinType) {
 				}
 				break
 			}
-		case jtSquare:
+		case JtSquare:
 			co.DoSquare(j, *k)
 			break
-		case jtRound:
+		case JtRound:
 			co.DoRound(j, *k)
 			break
 		}
