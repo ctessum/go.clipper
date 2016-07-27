@@ -224,7 +224,7 @@ func (pn *PolyNode) IsHole() bool {
 
 //------------------------------------------------------------------------------
 
-func Int128Mul(lhs, rhs cInt) *big.Int {
+func Int128Mul(lhs, rhs CInt) *big.Int {
 	a := big.NewInt(int64(lhs))
 	b := big.NewInt(int64(rhs))
 	c := new(big.Int)
@@ -245,10 +245,10 @@ func (a *IntPoint) NotEqual(b *IntPoint) bool {
 }
 
 type IntRect struct {
-	left, top, right, bottom cInt
+	left, top, right, bottom CInt
 }
 
-func NewIntRect(l, t, r, b cInt) *IntRect {
+func NewIntRect(l, t, r, b CInt) *IntRect {
 	this := new(IntRect)
 	this.left = l
 	this.top = t
@@ -397,7 +397,7 @@ func (i IntersectNodeList) Swap(a, b int)      { i[a], i[b] = i[b], i[a] }
 //  }
 
 type LocalMinima struct {
-	Y                     cInt
+	Y                     CInt
 	LeftBound, RightBound *TEdge
 	Next                  *LocalMinima
 }
@@ -422,7 +422,7 @@ func (lm *LocalMinima) printLML() string {
 }
 
 type Scanbeam struct {
-	Y    cInt
+	Y    CInt
 	Next *Scanbeam
 }
 
@@ -496,7 +496,7 @@ func near_zero(val float64) bool {
 	return (val > -tolerance) && (val < tolerance)
 }
 
-func (c *ClipperBase) Swap(val1, val2 *cInt) {
+func (c *ClipperBase) Swap(val1, val2 *CInt) {
 	*val1, *val2 = *val2, *val1
 }
 
@@ -687,7 +687,7 @@ func (c *ClipperBase) ProcessBound(E *TEdge, IsClockwise bool) *TEdge {
 	EStart := E
 	Result := E
 	var Horz *TEdge
-	var StartX cInt
+	var StartX CInt
 	if E.Dx == horizontal {
 		//first we need to be careful here with open paths because this
 		//may not be a true local minima (ie may be following a skip edge).
@@ -1238,7 +1238,7 @@ func (c *Clipper) Reset() {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) InsertScanbeam(Y cInt) {
+func (c *Clipper) InsertScanbeam(Y CInt) {
 	if c.m_Scanbeam == nil {
 		c.m_Scanbeam = new(Scanbeam)
 		c.m_Scanbeam.Next = nil
@@ -1399,7 +1399,7 @@ func (c *Clipper) ExecuteInternal() bool {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) PopScanbeam() cInt {
+func (c *Clipper) PopScanbeam() CInt {
 	Y := c.m_Scanbeam.Y
 	c.m_Scanbeam = c.m_Scanbeam.Next
 	return Y
@@ -1444,7 +1444,7 @@ func (c *Clipper) AddGhostJoin(Op *OutPt, OffPt *IntPoint) {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) InsertLocalMinimaIntoAEL(botY cInt) {
+func (c *Clipper) InsertLocalMinimaIntoAEL(botY CInt) {
 	for c.m_CurrentLM != nil && (c.m_CurrentLM.Y == botY) {
 		lb := c.m_CurrentLM.LeftBound
 		rb := c.m_CurrentLM.RightBound
@@ -2065,7 +2065,7 @@ func (c *Clipper) AddOutPt(e *TEdge, pt *IntPoint) *OutPt {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) HorzSegmentsOverlap(seg1a, seg1b, seg2a, seg2b cInt) bool {
+func (c *Clipper) HorzSegmentsOverlap(seg1a, seg1b, seg2a, seg2b CInt) bool {
 	if seg1a > seg1b {
 		c.Swap(&seg1a, &seg1b)
 	}
@@ -2683,7 +2683,7 @@ func (c *Clipper) ProcessHorizontals(isTopOfScanbeam bool) {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) GetHorzDirection(HorzEdge *TEdge, Dir *Direction, Left, Right *cInt) {
+func (c *Clipper) GetHorzDirection(HorzEdge *TEdge, Dir *Direction, Left, Right *CInt) {
 	if HorzEdge.Bot.X < HorzEdge.Top.X {
 		*Left = HorzEdge.Bot.X
 		*Right = HorzEdge.Top.X
@@ -2699,7 +2699,7 @@ func (c *Clipper) GetHorzDirection(HorzEdge *TEdge, Dir *Direction, Left, Right 
 
 func (c *Clipper) ProcessHorizontal(horzEdge *TEdge, isTopOfScanbeam bool) {
 	var dir Direction
-	var horzLeft, horzRight cInt
+	var horzLeft, horzRight CInt
 
 	c.GetHorzDirection(horzEdge, &dir, &horzLeft, &horzRight)
 
@@ -2830,13 +2830,13 @@ func (c *Clipper) IsMinima(e *TEdge) bool {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) IsMaxima(e *TEdge, Y cInt) bool {
+func (c *Clipper) IsMaxima(e *TEdge, Y CInt) bool {
 	return (e != nil && e.Top.Y == Y && e.NextInLML == nil)
 }
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) IsIntermediate(e *TEdge, Y cInt) bool {
+func (c *Clipper) IsIntermediate(e *TEdge, Y CInt) bool {
 	return (e.Top.Y == Y && e.NextInLML != nil)
 }
 
@@ -2858,7 +2858,7 @@ func (c *Clipper) GetMaximaPair(e *TEdge) *TEdge {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) ProcessIntersections(topY cInt) bool {
+func (c *Clipper) ProcessIntersections(topY CInt) bool {
 	if c.m_ActiveEdges == nil {
 		return true
 	}
@@ -2886,7 +2886,7 @@ func (c *Clipper) ProcessIntersections(topY cInt) bool {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) BuildIntersectList(topY cInt) {
+func (c *Clipper) BuildIntersectList(topY CInt) {
 	if c.m_ActiveEdges == nil {
 		return
 	}
@@ -2992,17 +2992,17 @@ func (c *Clipper) ProcessIntersectList() {
 
 //------------------------------------------------------------------------------
 
-func Round(value float64) cInt {
+func Round(value float64) CInt {
 	if value < 0 {
-		return cInt(value - 0.5)
+		return CInt(value - 0.5)
 	} else {
-		return cInt(value + 0.5)
+		return CInt(value + 0.5)
 	}
 }
 
 //------------------------------------------------------------------------------
 
-func TopX(edge *TEdge, currentY *cInt) cInt {
+func TopX(edge *TEdge, currentY *CInt) CInt {
 	if *currentY == edge.Top.Y {
 		return edge.Top.X
 	}
@@ -3078,7 +3078,7 @@ func (c *Clipper) IntersectPoint(edge1, edge2 *TEdge) (ip *IntPoint) {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) ProcessEdgesAtTopOfScanbeam(topY cInt) {
+func (c *Clipper) ProcessEdgesAtTopOfScanbeam(topY CInt) {
 	e := c.m_ActiveEdges
 	for e != nil {
 		//1. process maxima, treating them as if they're 'bent' horizontal edges,
@@ -3372,7 +3372,7 @@ func (c *Clipper) DupOutPt(outPt *OutPt, InsertAfter bool) *OutPt {
 
 //------------------------------------------------------------------------------
 
-func (c *Clipper) GetOverlap(a1, a2, b1, b2 cInt, Left, Right *cInt) bool {
+func (c *Clipper) GetOverlap(a1, a2, b1, b2 CInt, Left, Right *CInt) bool {
 	if a1 < a2 {
 		if b1 < b2 {
 			*Left = max(a1, b1)
@@ -3573,7 +3573,7 @@ func (c *Clipper) JoinPoints(j *Join, outRec1, outRec2 *OutRec) bool {
 			return false //a flat 'polygon'
 		}
 
-		var Left, Right cInt
+		var Left, Right CInt
 		//Op1 -. Op1b & Op2 -. Op2b are the extremites of the horizontal edges
 		if !c.GetOverlap(op1.Pt.X, op1b.Pt.X, op2.Pt.X, op2b.Pt.X, &Left, &Right) {
 			return false
@@ -4391,11 +4391,11 @@ func (co *ClipperOffset) Clear() {
 
 //------------------------------------------------------------------------------
 
-func (co *ClipperOffset) Round(value float64) cInt {
+func (co *ClipperOffset) Round(value float64) CInt {
 	if value < 0 {
-		return cInt(value - 0.5)
+		return CInt(value - 0.5)
 	} else {
-		return cInt(value + 0.5)
+		return CInt(value + 0.5)
 	}
 }
 
@@ -4442,13 +4442,13 @@ func (co *ClipperOffset) AddPath(path Path, joinType JoinType, endType EndType) 
 		return
 	}
 	if co.m_lowest.X < 0 {
-		co.m_lowest = &IntPoint{cInt(co.m_polyNodes.ChildCount() - 1), cInt(k)}
+		co.m_lowest = &IntPoint{CInt(co.m_polyNodes.ChildCount() - 1), CInt(k)}
 	} else {
 		ip := co.m_polyNodes.m_Childs[int(co.m_lowest.X)].m_polygon[int(co.m_lowest.Y)]
 		if newNode.m_polygon[k].Y > ip.Y ||
 			(newNode.m_polygon[k].Y == ip.Y &&
 				newNode.m_polygon[k].X < ip.X) {
-			co.m_lowest = &IntPoint{cInt(co.m_polyNodes.ChildCount() - 1), cInt(k)}
+			co.m_lowest = &IntPoint{CInt(co.m_polyNodes.ChildCount() - 1), CInt(k)}
 		}
 	}
 }
@@ -4636,14 +4636,14 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 			var pt1 *IntPoint
 			if node.m_endtype == EtOpenButt {
 				j := length - 1
-				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[j].X) +
+				pt1 = &IntPoint{CInt(co.Round(float64(co.m_srcPoly[j].X) +
 					co.m_normals[j].X*delta)),
-					cInt(co.Round(float64(co.m_srcPoly[j].Y) +
+					CInt(co.Round(float64(co.m_srcPoly[j].Y) +
 						co.m_normals[j].Y*delta))}
 				co.m_destPoly = append(co.m_destPoly, pt1)
-				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[j].X) -
+				pt1 = &IntPoint{CInt(co.Round(float64(co.m_srcPoly[j].X) -
 					co.m_normals[j].X*delta)),
-					cInt(co.Round(float64(co.m_srcPoly[j].Y) -
+					CInt(co.Round(float64(co.m_srcPoly[j].Y) -
 						co.m_normals[j].Y*delta))}
 				co.m_destPoly = append(co.m_destPoly, pt1)
 			} else {
@@ -4672,14 +4672,14 @@ func (co *ClipperOffset) DoOffset(delta float64) {
 			}
 
 			if node.m_endtype == EtOpenButt {
-				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[0].X) -
+				pt1 = &IntPoint{CInt(co.Round(float64(co.m_srcPoly[0].X) -
 					co.m_normals[0].X*delta)),
-					cInt(co.Round(float64(co.m_srcPoly[0].Y) -
+					CInt(co.Round(float64(co.m_srcPoly[0].Y) -
 						co.m_normals[0].Y*delta))}
 				co.m_destPoly = append(co.m_destPoly, pt1)
-				pt1 = &IntPoint{cInt(co.Round(float64(co.m_srcPoly[0].X) +
+				pt1 = &IntPoint{CInt(co.Round(float64(co.m_srcPoly[0].X) +
 					co.m_normals[0].X*delta)),
-					cInt(co.Round(float64(co.m_srcPoly[0].Y) +
+					CInt(co.Round(float64(co.m_srcPoly[0].Y) +
 						co.m_normals[0].Y*delta))}
 				co.m_destPoly = append(co.m_destPoly, pt1)
 			} else {
@@ -4896,14 +4896,14 @@ func intAbs(i int) int {
 		return i * -1
 	}
 }
-func min(a, b cInt) cInt {
+func min(a, b CInt) CInt {
 	if a < b {
 		return a
 	} else {
 		return b
 	}
 }
-func max(a, b cInt) cInt {
+func max(a, b CInt) CInt {
 	if a > b {
 		return a
 	} else {

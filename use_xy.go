@@ -5,22 +5,22 @@ package clipper
 import "fmt"
 
 type IntPoint struct {
-	X cInt
-	Y cInt
+	X CInt
+	Y CInt
 }
 
 func (p IntPoint) String() string {
 	return fmt.Sprintf("{%v, %v}", p.X, p.Y)
 }
 
-func NewIntPoint(X, Y cInt) *IntPoint {
+func NewIntPoint(X, Y CInt) *IntPoint {
 	ip := new(IntPoint)
 	ip.X, ip.Y = X, Y
 	return ip
 }
 func NewIntPointFromFloat(x, y float64) *IntPoint {
 	ip := new(IntPoint)
-	ip.X, ip.Y = cInt(x), cInt(y)
+	ip.X, ip.Y = CInt(x), CInt(y)
 	return ip
 }
 
