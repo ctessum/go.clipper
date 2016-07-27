@@ -20,7 +20,7 @@ func init() {
 func RandomPoly(maxWidth, maxHeight, vertCnt int) Path {
 	result := Path(make([]*IntPoint, vertCnt))
 	for i := 0; i < vertCnt-1; i++ {
-		result[i] = &IntPoint{cInt(rand.Intn(maxWidth)), cInt(rand.Intn(maxHeight))}
+		result[i] = &IntPoint{CInt(rand.Intn(maxWidth)), CInt(rand.Intn(maxHeight))}
 	}
 	result[vertCnt-1] = result[0]
 	return result
