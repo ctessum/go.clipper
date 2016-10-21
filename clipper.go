@@ -1316,6 +1316,7 @@ func (c *Clipper) Execute2(clipType ClipType,
 	succeeded = c.ExecuteInternal()
 	//build the return polygons ...
 	if succeeded {
+		polytree = NewPolyTree()
 		c.BuildResult2(polytree)
 	}
 	return
