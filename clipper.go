@@ -210,9 +210,9 @@ func (pn *PolyNode) GetNextSiblingUp() *PolyNode {
 	}
 }
 
-//func (pn *PolyNode) Childs() []*PolyNode {
-//	return pn.m_Childs
-//}
+func (pn *PolyNode) Childs() []*PolyNode {
+	return pn.m_Childs
+}
 
 func (pn *PolyNode) Parent() *PolyNode {
 	return pn.m_Parent
@@ -1316,6 +1316,7 @@ func (c *Clipper) Execute2(clipType ClipType,
 	succeeded = c.ExecuteInternal()
 	//build the return polygons ...
 	if succeeded {
+		polytree = NewPolyTree()
 		c.BuildResult2(polytree)
 	}
 	return
