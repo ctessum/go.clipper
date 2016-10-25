@@ -1395,6 +1395,7 @@ func (c *Clipper) ExecuteInternal() bool {
 	if c.StrictlySimple {
 		c.DoSimplePolygons()
 	}
+
 	return true
 }
 
@@ -3974,7 +3975,7 @@ func (c *Clipper) DoSimplePolygons() {
 		for { //for each Pt in Polygon until duplicate found do ...
 			op2 := op.Next
 			for op2 != outrec.Pts {
-				if (op.Pt == op2.Pt) && op2.Next != op && op2.Prev != op {
+				if op.Pt.Equals(op2.Pt) && op2.Next != op && op2.Prev != op {
 					//split the polygon into two ...
 					op3 := op.Prev
 					op4 := op2.Prev
