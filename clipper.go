@@ -61,6 +61,30 @@ func NewPaths() Paths {
 	return Paths(make([]Path, 0))
 }
 
+func (p Path) Equal(q Path) bool {
+	if len(p) != len(q) {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i].NotEqual(q[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (ps Paths) Equal(qs Paths) bool {
+	if len(ps) != len(qs) {
+		return false
+	}
+	for i := 0; i < len(ps); i++ {
+		if !ps[i].Equal(qs[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (p Path) String() string {
 	v := make([]string, len(p))
 	for i, pp := range p {
@@ -3302,7 +3326,7 @@ func (c *Clipper) BuildResult2(polytree *PolyTree) {
 	}
 
 	//fixup PolyNode links etc ...
-	polytree.m_Childs = make([]*PolyNode, len(c.m_PolyOuts))
+	polytree.m_Childs = make([]*PolyNode, 0, len(c.m_PolyOuts))
 	for i := 0; i < len(c.m_PolyOuts); i++ {
 		outRec := c.m_PolyOuts[i]
 		if outRec.PolyNode == nil {
