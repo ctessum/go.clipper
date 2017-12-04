@@ -3302,7 +3302,7 @@ func (c *Clipper) BuildResult2(polytree *PolyTree) {
 	}
 
 	//fixup PolyNode links etc ...
-	polytree.m_Childs = make([]*PolyNode, len(c.m_PolyOuts))
+	polytree.m_Childs = make([]*PolyNode, 0, len(c.m_PolyOuts))
 	for i := 0; i < len(c.m_PolyOuts); i++ {
 		outRec := c.m_PolyOuts[i]
 		if outRec.PolyNode == nil {
