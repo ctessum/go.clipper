@@ -475,7 +475,7 @@ var horizontal = math.Inf(-1)
 const (
 	Skip       int     = -2
 	Unassigned int     = -1
-	tolerance  float64 = 1.0E-20
+	tolerance  float64 = 1.0e-20
 )
 
 type ClipperBase struct {
@@ -4732,7 +4732,7 @@ func (co *ClipperOffset) Execute(delta float64) (solution Paths) {
 //------------------------------------------------------------------------------
 
 func (co *ClipperOffset) Execute2(delta float64) (solution *PolyTree) {
-	solution.Clear()
+	solution = NewPolyTree()
 	co.FixOrientations()
 	co.DoOffset(delta)
 
