@@ -98,7 +98,7 @@ func different(a, b float64) bool {
 
 func clipper2geom(data []Path) geom.Polygon {
 	var out geom.Polygon
-	var temp geom.Polygon = make([][]geom.Point, len(data))
+	var temp geom.Polygon = make([]geom.Path, len(data))
 	for i, r := range data {
 		temp[i] = make([]geom.Point, len(r))
 		for j, p := range r {
