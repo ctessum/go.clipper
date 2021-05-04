@@ -177,3 +177,53 @@ func TestExecute1(t *testing.T) {
 		}
 	}
 }
+
+var testCasesPftNonZero = []testCase{
+	{
+		subj: Paths{
+			{
+				{X: 53000000000, Y: 180000000000},
+				{X: 68000000000, Y: 200000000000},
+				{X: 44000000000, Y: 199000000000},
+			},
+			{
+				{X: 65000000000, Y: 160000000000},
+				{X: 58000000000, Y: 189000000000},
+				{X: 30000000000, Y: 190000000000},
+			},
+			{
+				{X: 61000000000, Y: 189000000000},
+				{X: 52000000000, Y: 195000000000},
+				{X: 48000000000, Y: 187000000000},
+			},
+		},
+		clip: Paths{},
+		solutions: []Paths{
+			// union
+			{{{58426086957, 187234782609}, {59586956522, 188782608696}, {X: 61000000000, Y: 189000000000}, {X: 60166666667, Y: 189555555556}, {X: 68000000000, Y: 200000000000}, {X: 44000000000, Y: 199000000000}, {X: 48577437859, Y: 189336520076}, {X: 30000000000, Y: 190000000000}, {X: 65000000000, Y: 160000000000}}},
+		},
+	},
+}
+
+func TestExecute1_Union_PftNonZero(t *testing.T) {
+	for i, v := range testCasesPftNonZero {
+		testName := fmt.Sprintf("fix%03d", i)
+		c := NewClipper(IoNone)
+		pft := PftNonZero
+
+		clipName := []string{"union"}
+		clipTypes := []ClipType{CtUnion}
+		c.AddPaths(v.subj, PtSubject, true)
+		c.AddPaths(v.clip, PtClip, true)
+
+		for j, ct := range clipTypes {
+			solution, ok := c.Execute1(ct, pft, pft)
+			if !ok {
+				t.Errorf("error running Execute1 %v: ok=false", clipName[j])
+			}
+			if got, want := solution.String(), v.solutions[j].String(); got != want {
+				t.Errorf("bad %v %v solution, got=%v, want=%v", testName, clipName[j], got, want)
+			}
+		}
+	}
+}

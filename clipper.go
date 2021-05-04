@@ -385,7 +385,7 @@ func (in *IntersectNode) String() string {
 type IntersectNodeList []*IntersectNode
 
 func (i IntersectNodeList) Len() int           { return len(i) }
-func (i IntersectNodeList) Less(a, b int) bool { return i[a].Pt.Y < i[b].Pt.Y }
+func (i IntersectNodeList) Less(a, b int) bool { return i[a].Pt.Y > i[b].Pt.Y }
 func (i IntersectNodeList) Swap(a, b int)      { i[a], i[b] = i[b], i[a] }
 
 //  class MyIntersectNodeSort : IComparer<IntersectNode>
