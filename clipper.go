@@ -622,10 +622,10 @@ func (c *ClipperBase) RangeTest(Pt *IntPoint, useFullRange *bool) {
 	if *useFullRange {
 		if Pt.X > hiRange || Pt.Y > hiRange || -Pt.X > hiRange || -Pt.Y > hiRange {
 			panic(NewClipperException("Coordinate outside allowed range"))
-		} else if Pt.X > loRange || Pt.Y > loRange || -Pt.X > loRange || -Pt.Y > loRange {
-			*useFullRange = true
-			c.RangeTest(Pt, useFullRange)
 		}
+	} else if Pt.X > loRange || Pt.Y > loRange || -Pt.X > loRange || -Pt.Y > loRange {
+		*useFullRange = true
+		c.RangeTest(Pt, useFullRange)
 	}
 }
 
