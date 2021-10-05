@@ -1755,9 +1755,9 @@ func (c *Clipper) SetWindingCount(edge *TEdge) {
 			//so we're inside the previous polygon ...
 			if edge.WindDelta == 0 {
 				if e.WindCnt < 0 {
-					edge.WindCnt = e.WindCnt - 1
+					e.WindCnt = e.WindCnt - 1
 				} else {
-					edge.WindCnt = e.WindCnt + 1
+					e.WindCnt = e.WindCnt + 1
 				}
 				//if wind direction is reversing prev then use same WC
 			} else if e.WindDelta*edge.WindDelta < 0 {
