@@ -511,7 +511,7 @@ func (c *ClipperBase) IsHorizontal(e *TEdge) bool {
 func (c *ClipperBase) PointIsVertex(pt *IntPoint, pp *OutPt) bool {
 	pp2 := pp
 	for {
-		if pp2.Pt == pt {
+		if *pp2.Pt == *pt {
 			return true
 		}
 		pp2 = pp2.Next
@@ -2110,23 +2110,23 @@ func (c *Clipper) GetDx(pt1, pt2 *IntPoint) float64 {
 
 func (c *Clipper) FirstIsBottomPt(btmPt1, btmPt2 *OutPt) bool {
 	p := btmPt1.Prev
-	for (p.Pt == btmPt1.Pt) && (p != btmPt1) {
+	for (*p.Pt == *btmPt1.Pt) && (p != btmPt1) {
 		p = p.Prev
 	}
 	dx1p := math.Abs(c.GetDx(btmPt1.Pt, p.Pt))
 	p = btmPt1.Next
-	for (p.Pt == btmPt1.Pt) && (p != btmPt1) {
+	for (*p.Pt == *btmPt1.Pt) && (p != btmPt1) {
 		p = p.Next
 	}
 	dx1n := math.Abs(c.GetDx(btmPt1.Pt, p.Pt))
 
 	p = btmPt2.Prev
-	for (p.Pt == btmPt2.Pt) && (p != btmPt2) {
+	for (*p.Pt == *btmPt2.Pt) && (p != btmPt2) {
 		p = p.Prev
 	}
 	dx2p := math.Abs(c.GetDx(btmPt2.Pt, p.Pt))
 	p = btmPt2.Next
-	for (p.Pt == btmPt2.Pt) && (p != btmPt2) {
+	for (*p.Pt == *btmPt2.Pt) && (p != btmPt2) {
 		p = p.Next
 	}
 	dx2n := math.Abs(c.GetDx(btmPt2.Pt, p.Pt))
@@ -2161,7 +2161,7 @@ func (c *Clipper) GetBottomPt(pp *OutPt) *OutPt {
 				pp = dups
 			}
 			dups = dups.Next
-			for dups.Pt != pp.Pt {
+			for *dups.Pt != *pp.Pt {
 				dups = dups.Next
 			}
 		}
@@ -3333,7 +3333,7 @@ func (c *Clipper) FixupOutPolygon(outRec *OutRec) {
 			return
 		}
 		//test for duplicate points and collinear edges ...
-		if (pp.Pt == pp.Next.Pt) || (pp.Pt == pp.Prev.Pt) ||
+		if (*pp.Pt == *pp.Next.Pt) || (*pp.Pt == *pp.Prev.Pt) ||
 			(c.SlopesEqual3(pp.Prev.Pt, pp.Pt, pp.Next.Pt, c.m_UseFullRange) &&
 				(!c.PreserveCollinear || !c.Pt2IsBetweenPt1AndPt3(pp.Prev.Pt, pp.Pt, pp.Next.Pt))) {
 			lastOK = nil
@@ -3429,7 +3429,7 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 			op1 = op1.Next
 		}
 		op1b = c.DupOutPt(op1, !DiscardLeft)
-		if op1b.Pt != Pt {
+		if *op1b.Pt != *Pt {
 			op1 = op1b
 			op1.Pt = Pt
 			op1b = c.DupOutPt(op1, !DiscardLeft)
@@ -3443,7 +3443,7 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 			op1 = op1.Next
 		}
 		op1b = c.DupOutPt(op1, DiscardLeft)
-		if op1b.Pt != Pt {
+		if *op1b.Pt != *Pt {
 			op1 = op1b
 			op1.Pt = Pt
 			op1b = c.DupOutPt(op1, DiscardLeft)
@@ -3459,7 +3459,7 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 			op2 = op2.Next
 		}
 		op2b = c.DupOutPt(op2, !DiscardLeft)
-		if op2b.Pt != Pt {
+		if *op2b.Pt != *Pt {
 			op2 = op2b
 			op2.Pt = Pt
 			op2b = c.DupOutPt(op2, !DiscardLeft)
@@ -3473,7 +3473,7 @@ func (c *Clipper) JoinHorz(op1, op1b, op2, op2b *OutPt,
 			op2 = op2.Next
 		}
 		op2b = c.DupOutPt(op2, DiscardLeft)
-		if op2b.Pt != Pt {
+		if *op2b.Pt != *Pt {
 			op2 = op2b
 			op2.Pt = Pt
 			op2b = c.DupOutPt(op2, DiscardLeft)
@@ -3516,12 +3516,12 @@ func (c *Clipper) JoinPoints(j *Join, outRec1, outRec2 *OutRec) bool {
 			return false
 		}
 		op1b = j.OutPt1.Next
-		for op1b != op1 && (op1b.Pt == j.OffPt) {
+		for op1b != op1 && (*op1b.Pt == *j.OffPt) {
 			op1b = op1b.Next
 		}
 		reverse1 := (op1b.Pt.Y > j.OffPt.Y)
 		op2b = j.OutPt2.Next
-		for op2b != op2 && (op2b.Pt == j.OffPt) {
+		for op2b != op2 && (*op2b.Pt == *j.OffPt) {
 			op2b = op2b.Next
 		}
 		reverse2 := (op2b.Pt.Y > j.OffPt.Y)
@@ -3609,14 +3609,14 @@ func (c *Clipper) JoinPoints(j *Join, outRec1, outRec2 *OutRec) bool {
 
 		//make sure the polygons are correctly oriented ...
 		op1b = op1.Next
-		for (op1b.Pt == op1.Pt) && (op1b != op1) {
+		for (*op1b.Pt == *op1.Pt) && (op1b != op1) {
 			op1b = op1b.Next
 		}
 		Reverse1 := ((op1b.Pt.Y > op1.Pt.Y) ||
 			!c.SlopesEqual3(op1.Pt, op1b.Pt, j.OffPt, c.m_UseFullRange))
 		if Reverse1 {
 			op1b = op1.Prev
-			for (op1b.Pt == op1.Pt) && (op1b != op1) {
+			for (*op1b.Pt == *op1.Pt) && (op1b != op1) {
 				op1b = op1b.Prev
 			}
 			if (op1b.Pt.Y > op1.Pt.Y) ||
@@ -3625,14 +3625,14 @@ func (c *Clipper) JoinPoints(j *Join, outRec1, outRec2 *OutRec) bool {
 			}
 		}
 		op2b = op2.Next
-		for (op2b.Pt == op2.Pt) && (op2b != op2) {
+		for (*op2b.Pt == *op2.Pt) && (op2b != op2) {
 			op2b = op2b.Next
 		}
 		Reverse2 := ((op2b.Pt.Y > op2.Pt.Y) ||
 			!c.SlopesEqual3(op2.Pt, op2b.Pt, j.OffPt, c.m_UseFullRange))
 		if Reverse2 {
 			op2b = op2.Prev
-			for (op2b.Pt == op2.Pt) && (op2b != op2) {
+			for (*op2b.Pt == *op2.Pt) && (op2b != op2) {
 				op2b = op2b.Prev
 			}
 			if (op2b.Pt.Y > op2.Pt.Y) ||
